@@ -242,6 +242,15 @@ export default function VirtualTryOnModal() {
     }
   }
 
+  function runInstantPreview() {
+    setStep(STEP.PROCESSING);
+    setTimeout(() => {
+      setResultUrl(tryOnProduct.image);
+      setResultMeta({ isAiGenerated: false, model: 'LUXORA Preview Fit' });
+      setStep(STEP.RESULT);
+    }, 1200);
+  }
+
   /* ─── Add to bag ─────────────────────────────────────────── */
   function handleAddToBag() {
     if (!tryOnProduct || !selectedSize) return;
@@ -653,6 +662,25 @@ export default function VirtualTryOnModal() {
                     style={{ padding: '10px 16px', fontSize: '11px', whiteSpace: 'nowrap' }}
                   >
                     {savingKey ? 'Connecting…' : 'Save & Run Try-On'}
+                  </button>
+                </div>
+
+                <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px dashed #E8E4DC', textAlign: 'center' }}>
+                  <button
+                    type="button"
+                    onClick={runInstantPreview}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      fontSize: '11.5px',
+                      color: '#B49A75',
+                      fontWeight: 600,
+                      textDecoration: 'underline',
+                      letterSpacing: '0.04em',
+                    }}
+                  >
+                    ⚡ Don't have a key? Continue with Instant Preview Fit
                   </button>
                 </div>
               </div>
