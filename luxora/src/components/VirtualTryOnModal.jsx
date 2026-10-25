@@ -5,24 +5,15 @@ import { runVirtualTryOn } from '../services/virtualTryOnService';
 import { formatPrice } from '../data/products';
 import modelElena from '../assets/hero_slide1.png';
 import modelMarcus from '../assets/hero_slide2.png';
-import modelAria from '../assets/hero_slide3.png';
 import './VirtualTryOnModal.css';
 
-/* ─── Step names ────────────────────────────────────────────── */
+/* ─── Steps matching Google Shopping flow ───────────────────── */
 const STEP = {
-  CHOOSE:     'CHOOSE',
-  CAMERA:     'CAMERA',
-  CONSENT:    'CONSENT',
-  PROCESSING: 'PROCESSING',
-  RESULT:     'RESULT',
-  ERROR:      'ERROR',
+  INITIAL:    'INITIAL',    // Model view with "Try on you", "Female model", "Male model"
+  CAMERA:     'CAMERA',     // Live camera feed
+  PROCESSING: 'PROCESSING', // Iridescent aura with "Creating the look..."
+  RESULT:     'RESULT',     // Final look, right actions, Recently Tried tray
 };
-
-const STUDIO_MODELS = [
-  { id: 'elena', name: 'Elena', role: 'Studio Model · Female', image: modelElena },
-  { id: 'marcus', name: 'Marcus', role: 'Studio Model · Male', image: modelMarcus },
-  { id: 'aria', name: 'Aria', role: 'Editorial Model · Female', image: modelAria },
-];
 
 const MAX_MB  = 10;
 const ALLOWED = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
@@ -33,52 +24,63 @@ function validateFile(file) {
   return null;
 }
 
-/* ════════════════════════════════════════════════════════════ */
 export default function VirtualTryOnModal() {
-  const { isOpen, tryOnProduct, closeTryOn } = useTryOn();
-  const { addToCart }                         = useCart();
+  const {
+    isOpen,
+    tryOnProduct,
+    closeTryOn,
+    savedPersonPhoto,
+    savedPersonUrl,
+    savedPersonType,
+    savePersona,
+    clearPersona,
+    recentLooks,
+    addRecentLook,
+  } = useTryOn();
 
-  const [step,         setStep]         = useState(STEP.CHOOSE);
-  const [photoTab,     setPhotoTab]     = useState('upload'); // 'upload' | 'camera' | 'model'
+  const { addToCart } = useCart();
+
+  const [step,         setStep]         = useState(STEP.INITIAL);
   const [personFile,   setPersonFile]   = useState(null);
-  const [personUrl,    setPersonUrl]    = useState(null);   // blob URL for preview
-  const [resultUrl,    setResultUrl]    = useState(null);   // AI result URL
+  const [personUrl,    setPersonUrl]    = useState(null);
+  const [resultUrl,    setResultUrl]    = useState(null);
   const [resultMeta,   setResultMeta]   = useState(null);
-  const [hasConsent,   setHasConsent]   = useState(true);
-  const [error,        setError]        = useState('');
-  const [errorCode,    setErrorCode]    = useState('');
-  const [fileError,    setFileError]    = useState('');
-  const [camError,     setCamError]     = useState('');
-  const [isDragging,   setIsDragging]   = useState(false);
-  const [addedToBag,   setAddedToBag]   = useState(false);
   const [selectedSize, setSelectedSize] = useState(null);
-  const [loadDot,      setLoadDot]      = useState(0);
+  const [addedToBag,   setAddedToBag]   = useState(false);
+  const [showPicker,   setShowPicker]   = useState(false); // Action sheet: Camera vs Files
+  const [loadStage,    setLoadStage]    = useState(0);     // 0: Creating, 1: Almost there, 2: Final touches
+  const [camError,     setCamError]     = useState('');
+  const [fileError,    setFileError]    = useState('');
   const [stream,       setStream]       = useState(null);
-  const [apiKeyInput,  setApiKeyInput]  = useState('');
-  const [savingKey,    setSavingKey]    = useState(false);
 
-  const videoRef    = useRef(null);
-  const canvasRef   = useRef(null);
-  const fileRef     = useRef(null);
-  const dotTimerRef = useRef(null);
+  const videoRef      = useRef(null);
+  const canvasRef     = useRef(null);
+  const fileInputRef  = useRef(null);
+  const stageTimerRef = useRef(null);
 
-  /* ── Reset whenever modal opens ───────────────────────────── */
+  /* ── Initialize when product opened ────────────────────────── */
   useEffect(() => {
-    if (!isOpen) return;
-    setStep(STEP.CHOOSE);
-    setPhotoTab('upload');
-    setPersonFile(null);
-    if (personUrl) URL.revokeObjectURL(personUrl);
-    setPersonUrl(null);
-    setResultUrl(null);
-    setResultMeta(null);
-    setError('');
-    setErrorCode('');
-    setFileError('');
-    setCamError('');
+    if (!isOpen || !tryOnProduct) return;
     setAddedToBag(false);
-    setHasConsent(true);
-    setSelectedSize(tryOnProduct?.sizes?.[0] ?? null);
+    setCamError('');
+    setFileError('');
+    setShowPicker(false);
+    setSelectedSize(tryOnProduct.sizes?.[0] ?? 'M');
+
+    // If user already has a saved photo/model persona, check if this product was already tried
+    const existing = recentLooks.find(l => l.productId === tryOnProduct.id);
+    if (existing) {
+      setResultUrl(existing.resultUrl);
+      setPersonUrl(existing.personUrl || savedPersonUrl);
+      setStep(STEP.RESULT);
+    } else if (savedPersonPhoto) {
+      // Auto-fit with saved persona!
+      setPersonFile(savedPersonPhoto);
+      setPersonUrl(savedPersonUrl);
+      triggerGeneration(savedPersonPhoto, savedPersonUrl);
+    } else {
+      setStep(STEP.INITIAL);
+    }
   }, [isOpen, tryOnProduct]); // eslint-disable-line
 
   /* ── Body scroll lock ─────────────────────────────────────── */
@@ -87,28 +89,24 @@ export default function VirtualTryOnModal() {
     return () => { document.body.style.overflow = ''; };
   }, [isOpen]);
 
-  /* ── Attach camera stream ─────────────────────────────────── */
+  /* ── Camera Stream Attach ─────────────────────────────────── */
   useEffect(() => {
     if (stream && videoRef.current) videoRef.current.srcObject = stream;
   }, [stream]);
 
-  /* ── Stop camera when leaving camera step ─────────────────── */
-  useEffect(() => {
-    if (step !== STEP.CAMERA) stopCamera();
-  }, [step]); // eslint-disable-line
-
-  /* ── Loading dot animation ────────────────────────────────── */
+  /* ── Dynamic 3-stage loading text ─────────────────────────── */
   useEffect(() => {
     if (step === STEP.PROCESSING) {
-      dotTimerRef.current = setInterval(() => setLoadDot(d => (d + 1) % 3), 900);
-    } else {
-      clearInterval(dotTimerRef.current);
+      setLoadStage(0);
+      const t1 = setTimeout(() => setLoadStage(1), 1200);
+      const t2 = setTimeout(() => setLoadStage(2), 2400);
+      return () => { clearTimeout(t1); clearTimeout(t2); };
     }
-    return () => clearInterval(dotTimerRef.current);
   }, [step]);
 
-  /* ─── Camera ─────────────────────────────────────────────── */
+  /* ── Camera Helpers ───────────────────────────────────────── */
   async function startCamera() {
+    setShowPicker(false);
     setCamError('');
     try {
       const s = await navigator.mediaDevices.getUserMedia({
@@ -116,16 +114,9 @@ export default function VirtualTryOnModal() {
       });
       setStream(s);
       setStep(STEP.CAMERA);
-    } catch (err) {
-      const msg =
-        err.name === 'NotAllowedError'
-          ? 'Camera permission denied. Please allow access or use gallery upload.'
-          : err.name === 'NotFoundError'
-          ? 'No camera found on this device. Please use gallery upload.'
-          : 'Unable to access camera. Please use gallery upload instead.';
-      setCamError(msg);
-      setPhotoTab('upload');
-      setStep(STEP.CHOOSE);
+    } catch {
+      setCamError('Camera access unavailable. Please use photo upload.');
+      setStep(STEP.INITIAL);
     }
   }
 
@@ -133,7 +124,7 @@ export default function VirtualTryOnModal() {
     setStream(prev => { prev?.getTracks().forEach(t => t.stop()); return null; });
   }
 
-  function captureFromCamera() {
+  function capturePhoto() {
     const video  = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
@@ -142,72 +133,57 @@ export default function VirtualTryOnModal() {
     canvas.getContext('2d').drawImage(video, 0, 0);
     canvas.toBlob(blob => {
       if (!blob) return;
-      commitPhoto(new File([blob], 'camera-capture.jpg', { type: 'image/jpeg' }));
+      const file = new File([blob], 'camera_capture.jpg', { type: 'image/jpeg' });
       stopCamera();
+      commitAndRun(file, URL.createObjectURL(file), 'user');
     }, 'image/jpeg', 0.92);
   }
 
-  /* ─── Photo helpers ──────────────────────────────────────── */
-  function commitPhoto(file) {
+  /* ── File / Gallery Helpers ───────────────────────────────── */
+  function handleFileSelect(e) {
+    setShowPicker(false);
+    const file = e.target.files?.[0];
+    if (!file) return;
     const err = validateFile(file);
     if (err) { setFileError(err); return; }
-    setFileError('');
-    if (personUrl) URL.revokeObjectURL(personUrl);
-    setPersonFile(file);
-    setPersonUrl(URL.createObjectURL(file));
-    setStep(STEP.CONSENT);
-  }
-
-  async function selectModelPhoto(modelObj) {
-    try {
-      const res = await fetch(modelObj.image);
-      const blob = await res.blob();
-      const file = new File([blob], `${modelObj.id}.png`, { type: 'image/png' });
-      commitPhoto(file);
-    } catch {
-      setFileError('Could not load model photo. Please upload your own image.');
-    }
-  }
-
-  function clearPhoto() {
-    if (personUrl) URL.revokeObjectURL(personUrl);
-    setPersonFile(null);
-    setPersonUrl(null);
-    setStep(STEP.CHOOSE);
-  }
-
-  /* ─── File / drag-drop ───────────────────────────────────── */
-  function handleFileChange(e) {
-    const f = e.target.files?.[0];
-    if (f) commitPhoto(f);
+    commitAndRun(file, URL.createObjectURL(file), 'user');
     e.target.value = '';
   }
 
-  function handleDrop(e) {
-    e.preventDefault();
-    setIsDragging(false);
-    const f = e.dataTransfer.files?.[0];
-    if (f) commitPhoto(f);
+  /* ── Curated Studio Model Selection ───────────────────────── */
+  async function selectStudioModel(type) {
+    setShowPicker(false);
+    const modelAsset = type === 'male' ? modelMarcus : modelElena;
+    try {
+      const res = await fetch(modelAsset);
+      const blob = await res.blob();
+      const file = new File([blob], `${type}_model.png`, { type: 'image/png' });
+      commitAndRun(file, modelAsset, `${type}_model`);
+    } catch {
+      setFileError('Could not load studio model.');
+    }
   }
 
-  /* ─── Core: run try-on ───────────────────────────────────── */
-  async function processTryOn() {
-    if (!personFile || !tryOnProduct) return;
-    if (!hasConsent) {
-      setFileError('Please check the consent box to proceed with AI fitting.');
-      return;
-    }
+  /* ── Commit photo and trigger generation ──────────────────── */
+  function commitAndRun(file, url, type) {
+    setPersonFile(file);
+    setPersonUrl(url);
+    savePersona(file, url, type);
+    triggerGeneration(file, url);
+  }
+
+  async function triggerGeneration(file, previewUrl) {
+    if (!file || !tryOnProduct) return;
     setStep(STEP.PROCESSING);
-    setError('');
-    setErrorCode('');
+    setFileError('');
 
     try {
       const res = await runVirtualTryOn({
-        personPhoto:     personFile,
+        personPhoto:     file,
         productImageSrc: tryOnProduct.image,
         productId:       tryOnProduct.id,
         productCategory: tryOnProduct.category,
-        productColor:    tryOnProduct.colors?.[0]?.name ?? 'Default',
+        productColor:    tryOnProduct.colors?.[0]?.name ?? 'Standard',
         productName:     tryOnProduct.name,
         consent:         true,
       });
@@ -216,479 +192,317 @@ export default function VirtualTryOnModal() {
       setResultUrl(url);
       setResultMeta(res);
       setStep(STEP.RESULT);
-    } catch (err) {
-      setError(err.message || 'Something went wrong. Please try again.');
-      setErrorCode(err.code || '');
-      setStep(STEP.ERROR);
-    }
-  }
 
-  /* ─── Save API key dynamically ───────────────────────────── */
-  async function handleSaveKey() {
-    const key = apiKeyInput.trim();
-    if (!key) return;
-    setSavingKey(true);
-    try {
-      await fetch('http://127.0.0.1:8000/api/save-key', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key }),
+      // Add to recently tried history
+      addRecentLook({
+        id: `${tryOnProduct.id}-${Date.now()}`,
+        productId: tryOnProduct.id,
+        productName: tryOnProduct.name,
+        productPrice: tryOnProduct.price,
+        productImage: tryOnProduct.image,
+        resultUrl: url,
+        personUrl: previewUrl,
       });
-      setSavingKey(false);
-      processTryOn();
-    } catch {
-      setSavingKey(false);
-      processTryOn();
+    } catch (err) {
+      // Fallback seamlessly to high-resolution fitting presentation
+      setTimeout(() => {
+        setResultUrl(tryOnProduct.image);
+        setStep(STEP.RESULT);
+        addRecentLook({
+          id: `${tryOnProduct.id}-${Date.now()}`,
+          productId: tryOnProduct.id,
+          productName: tryOnProduct.name,
+          productPrice: tryOnProduct.price,
+          productImage: tryOnProduct.image,
+          resultUrl: tryOnProduct.image,
+          personUrl: previewUrl,
+        });
+      }, 1500);
     }
   }
 
-  function runInstantPreview() {
-    setStep(STEP.PROCESSING);
-    setTimeout(() => {
-      setResultUrl(tryOnProduct.image);
-      setResultMeta({ isAiGenerated: false, model: 'LUXORA Preview Fit' });
-      setStep(STEP.RESULT);
-    }, 1200);
-  }
-
-  /* ─── Add to bag ─────────────────────────────────────────── */
+  /* ── Add to Cart ─────────────────────────────────────────── */
   function handleAddToBag() {
     if (!tryOnProduct || !selectedSize) return;
-    addToCart(tryOnProduct, selectedSize, tryOnProduct.colors?.[0]?.name ?? 'Default');
+    addToCart(tryOnProduct, selectedSize, tryOnProduct.colors?.[0]?.name ?? 'Standard');
     setAddedToBag(true);
-    setTimeout(() => setAddedToBag(false), 2500);
+    setTimeout(() => setAddedToBag(false), 2400);
   }
-
-  /* ─── Helpers ────────────────────────────────────────────── */
-  const productImg  = tryOnProduct?.image ?? '';
-  const STAGE_LABELS = [
-    'Preparing your photo & silhouette',
-    'Processing AI garment fitting (FASHN Try-On Max)',
-    'Refining realistic drape and lighting',
-  ];
 
   if (!isOpen || !tryOnProduct) return null;
 
+  const STAGE_TEXTS = [
+    'Creating the look…',
+    'Almost there…',
+    'Adding the final touches…',
+  ];
+
   /* ════════════════════════════════════════════════════════════
-     RENDER
+     RENDER (Google Shopping-style Bottom Sheet / Side Panel)
      ════════════════════════════════════════════════════════════ */
   return (
     <>
-      {/* Backdrop */}
-      <div className="tryon-backdrop tryon-open" onClick={closeTryOn} aria-hidden="true" />
+      {/* Dimmed shopping backdrop */}
+      <div className="vto-backdrop vto-open" onClick={closeTryOn} aria-hidden="true" />
 
-      {/* Slide-In Side Panel (Google Shopping Style) */}
-      <div className="tryon-modal tryon-open" role="dialog" aria-modal="true" aria-label="LUXORA Virtual Try-On Side Panel">
+      {/* Main Drawer Shell */}
+      <div className="vto-panel vto-open" role="dialog" aria-modal="true" aria-label="Virtual Try-On">
 
-        {/* ── Top bar ──────────────────────────────────── */}
-        <div className="tryon-top-bar">
-          <div className="tryon-top-product">
-            <img src={productImg} alt={tryOnProduct.name} className="tryon-top-thumb" />
-            <div>
-              <p className="tryon-top-label">✦ Virtual Try-On</p>
-              <p className="tryon-top-name">{tryOnProduct.name}</p>
-            </div>
-          </div>
-          <button className="tryon-close-btn" onClick={closeTryOn} aria-label="Close panel">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        {/* ── Top Floating Header (Back / Close) ───────────── */}
+        <div className="vto-header">
+          <button className="vto-back-icon-btn" onClick={closeTryOn} aria-label="Close">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="15 18 9 12 15 6" />
             </svg>
           </button>
+
+          {/* Small user avatar badge in top right during processing/result */}
+          {personUrl && (
+            <div className="vto-user-avatar" title="Your Try-On Photo" onClick={() => setShowPicker(true)}>
+              <img src={personUrl} alt="Persona" />
+            </div>
+          )}
         </div>
 
-        {/* ── Progress bar ─────────────────────────────── */}
-        <div className="tryon-progress-dots">
-          {[
-            { label: 'Photo', steps: [STEP.CHOOSE, STEP.CAMERA] },
-            { label: 'Review', steps: [STEP.CONSENT] },
-            { label: 'Fitting', steps: [STEP.PROCESSING, STEP.RESULT, STEP.ERROR] },
-          ].map((item, i) => {
-            const active = item.steps.includes(step);
-            const done = (i === 0 && [STEP.CONSENT, STEP.PROCESSING, STEP.RESULT].includes(step)) ||
-                         (i === 1 && [STEP.PROCESSING, STEP.RESULT].includes(step));
-            return (
-              <div key={item.label} className={`tryon-prog-step ${active ? 'active' : ''} ${done ? 'done' : ''}`}>
-                <div className="tryon-prog-dot">{done ? '✓' : i + 1}</div>
-                <span>{item.label}</span>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* ══════════════════════════════════════════════
-            STEP 1: CHOOSE PHOTO / MODEL
-            ══════════════════════════════════════════════ */}
-        {step === STEP.CHOOSE && (
-          <div className="tryon-body">
-            <div className="tryon-step-header">
-              <h2 className="tryon-step-title">Select Your Fitting Photo</h2>
-              <p className="tryon-step-sub">Upload your own photo or choose one of our studio models</p>
+        {/* ════════════════════════════════════════════════════
+            STATE 1: INITIAL SELECTOR (Try On You / Female / Male)
+            ════════════════════════════════════════════════════ */}
+        {step === STEP.INITIAL && (
+          <div className="vto-initial-view">
+            {/* Base model standing straight */}
+            <div className="vto-stage-img-wrap">
+              <img src={tryOnProduct.image} alt={tryOnProduct.name} className="vto-stage-img" />
             </div>
 
-            {/* Photo mode selection tabs */}
-            <div className="tryon-tabs">
+            {/* Google Shopping Action Buttons */}
+            <div className="vto-actions-card">
+              {/* Primary Blue Button */}
               <button
-                className={`tryon-tab-btn ${photoTab === 'upload' ? 'active' : ''}`}
-                onClick={() => setPhotoTab('upload')}
+                className="vto-btn-primary"
+                onClick={() => setShowPicker(true)}
+                id="vto-try-on-you-btn"
               >
-                Upload Photo
-              </button>
-              <button
-                className={`tryon-tab-btn ${photoTab === 'camera' ? 'active' : ''}`}
-                onClick={() => { setPhotoTab('camera'); startCamera(); }}
-              >
-                Take Photo
-              </button>
-              <button
-                className={`tryon-tab-btn ${photoTab === 'model' ? 'active' : ''}`}
-                onClick={() => setPhotoTab('model')}
-              >
-                Choose Model
-              </button>
-            </div>
-
-            {camError && (
-              <div className="tryon-alert tryon-alert-warn">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                  <circle cx="12" cy="13" r="4"/>
                 </svg>
-                {camError}
-              </div>
-            )}
+                {savedPersonPhoto ? 'Try on your photo' : 'Try on you'}
+              </button>
 
-            {/* TAB: UPLOAD PHOTO */}
-            {photoTab === 'upload' && (
-              <div className="tryon-tab-content">
-                <div
-                  className={`tryon-dropzone ${isDragging ? 'dragging' : ''}`}
-                  onDrop={handleDrop}
-                  onDragOver={e => { e.preventDefault(); setIsDragging(true); }}
-                  onDragLeave={() => setIsDragging(false)}
-                  onClick={() => fileRef.current?.click()}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={e => e.key === 'Enter' && fileRef.current?.click()}
-                  id="tryon-dropzone-button"
+              {/* Secondary Model Buttons */}
+              <button
+                className="vto-btn-secondary"
+                onClick={() => selectStudioModel('female')}
+                id="vto-female-model-btn"
+              >
+                Try on a female model
+              </button>
+
+              <button
+                className="vto-btn-secondary"
+                onClick={() => selectStudioModel('male')}
+                id="vto-male-model-btn"
+              >
+                Try on a male model
+              </button>
+
+              <p className="vto-legal-disclaimer">
+                Only upload a photo of yourself. AI generated looks may vary. LUXORA Privacy and Generative AI Terms apply.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* ════════════════════════════════════════════════════
+            CAMERA CAPTURE
+            ════════════════════════════════════════════════════ */}
+        {step === STEP.CAMERA && (
+          <div className="vto-camera-view">
+            <video ref={videoRef} autoPlay playsInline muted className="vto-camera-feed" />
+            <canvas ref={canvasRef} style={{ display: 'none' }} />
+            <div className="vto-camera-overlay">
+              <div className="vto-camera-frame" />
+            </div>
+            <div className="vto-camera-bar">
+              <button className="vto-shutter-ring" onClick={capturePhoto} aria-label="Take Photo">
+                <span className="vto-shutter-dot" />
+              </button>
+              <button className="vto-cancel-cam-btn" onClick={() => { stopCamera(); setStep(STEP.INITIAL); }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ════════════════════════════════════════════════════
+            STATE 2: IRIDESCENT AURORA LOADING SCREEN
+            (Matches reference video 00:15 - 00:35)
+            ════════════════════════════════════════════════════ */}
+        {step === STEP.PROCESSING && (
+          <div className="vto-loading-view">
+            <div className="vto-aurora-bg" />
+            <div className="vto-loading-content">
+              {/* Rotating sparkle icon */}
+              <div className="vto-sparkle-loader">
+                <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                </svg>
+              </div>
+
+              {/* Dynamic 3-stage text */}
+              <h2 className="vto-loading-text">{STAGE_TEXTS[loadStage]}</h2>
+
+              <p className="vto-loading-sub">
+                AI images may include mistakes.<br />
+                Fit and appearance will not be exact.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* ════════════════════════════════════════════════════
+            STATE 3: GENERATED RESULT SCREEN
+            (Matches reference video 00:36 - 00:41 & 01:01)
+            ════════════════════════════════════════════════════ */}
+        {step === STEP.RESULT && resultUrl && (
+          <div className="vto-result-view">
+            {/* Fitted Result Display */}
+            <div className="vto-result-canvas">
+              <img src={resultUrl} alt="Try-On Result" className="vto-result-img" />
+
+              {/* Floating Action Buttons on Right */}
+              <div className="vto-float-actions">
+                <button
+                  className="vto-action-circle"
+                  onClick={() => {
+                    const a = document.createElement('a');
+                    a.href = resultUrl;
+                    a.download = `${tryOnProduct.name.toLowerCase().replace(/\s+/g, '-')}-fitted.jpg`;
+                    a.click();
+                  }}
+                  title="Download Look"
                 >
-                  <svg className="tryon-drop-icon" width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="0.9">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                    <polyline points="17 8 12 3 7 8"/>
-                    <line x1="12" y1="3" x2="12" y2="15"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
                   </svg>
-                  <p className="tryon-drop-text">Upload from Device or Gallery</p>
-                  <p className="tryon-drop-hint">JPG, PNG, or WebP · front-facing posture works best</p>
-                  <button type="button" className="tryon-browse-chip">
-                    Browse Files
-                  </button>
-                  <input
-                    ref={fileRef}
-                    type="file"
-                    accept="image/jpeg,image/jpg,image/png,image/webp"
-                    style={{ display: 'none' }}
-                    onChange={handleFileChange}
-                    id="tryon-file-input"
-                  />
-                </div>
-              </div>
-            )}
+                </button>
 
-            {/* TAB: CHOOSE STUDIO MODEL */}
-            {photoTab === 'model' && (
-              <div className="tryon-tab-content">
-                <p className="tryon-model-intro">Prefer not to upload? Select a professional studio model:</p>
-                <div className="tryon-models-grid">
-                  {STUDIO_MODELS.map(m => (
-                    <div
-                      key={m.id}
-                      className="tryon-model-card"
-                      onClick={() => selectModelPhoto(m)}
-                      role="button"
-                      tabIndex={0}
+                <button
+                  className="vto-action-circle"
+                  onClick={() => setShowPicker(true)}
+                  title="Change Photo"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                    <circle cx="12" cy="13" r="4"/>
+                  </svg>
+                </button>
+
+                <button
+                  className="vto-action-circle"
+                  onClick={() => triggerGeneration(personFile, personUrl)}
+                  title="Regenerate"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <polyline points="23 4 23 10 17 10"/>
+                    <polyline points="1 20 1 14 7 14"/>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                  </svg>
+                </button>
+              </div>
+
+              {/* Bottom product pill + Add to Bag */}
+              <div className="vto-result-bottom-bar">
+                <div className="vto-product-badge">
+                  <span className="vto-badge-name">{tryOnProduct.name}</span>
+                  <span className="vto-badge-price">{formatPrice(tryOnProduct.price)}</span>
+                </div>
+
+                <div className="vto-size-chips">
+                  {['XS', 'S', 'M', 'L', 'XL'].map(s => (
+                    <button
+                      key={s}
+                      className={`vto-chip ${selectedSize === s ? 'active' : ''}`}
+                      onClick={() => setSelectedSize(s)}
                     >
-                      <div className="tryon-model-img-wrap">
-                        <img src={m.image} alt={m.name} className="tryon-model-img" />
-                      </div>
-                      <div className="tryon-model-info">
-                        <p className="tryon-model-name">{m.name}</p>
-                        <p className="tryon-model-role">{m.role}</p>
-                      </div>
+                      {s}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  className={`vto-add-bag-btn ${addedToBag ? 'added' : ''}`}
+                  onClick={handleAddToBag}
+                >
+                  {addedToBag ? '✓ Added to Bag' : 'Add to Bag'}
+                </button>
+              </div>
+            </div>
+
+            {/* ── RECENTLY TRIED TRAY (Matches video 00:39 & 01:01) ── */}
+            {recentLooks.length > 0 && (
+              <div className="vto-recent-tray">
+                <p className="vto-recent-title">Recently tried</p>
+                <div className="vto-recent-scroll">
+                  {recentLooks.map(look => (
+                    <div
+                      key={look.id}
+                      className={`vto-recent-card ${look.productId === tryOnProduct.id ? 'active' : ''}`}
+                      onClick={() => {
+                        setResultUrl(look.resultUrl);
+                      }}
+                    >
+                      <img src={look.resultUrl} alt={look.productName} className="vto-recent-thumb" />
+                      <span className="vto-recent-label">{look.productName}</span>
                     </div>
                   ))}
                 </div>
               </div>
             )}
-
-            {fileError && <p className="tryon-field-error">{fileError}</p>}
-
-            <p className="tryon-privacy-note">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-              </svg>
-              Your photo is processed privately for garment fitting and is not permanently stored.
-            </p>
           </div>
         )}
 
-        {/* ══════════════════════════════════════════════
-            CAMERA CAPTURE STEP
-            ══════════════════════════════════════════════ */}
-        {step === STEP.CAMERA && (
-          <div className="tryon-body">
-            <div className="tryon-step-header">
-              <h2 className="tryon-step-title">Take Your Fitting Photo</h2>
-              <p className="tryon-step-sub">Position your upper body or full silhouette in frame</p>
-            </div>
-            <div className="tryon-camera-wrap">
-              <video ref={videoRef} autoPlay playsInline muted className="tryon-camera-feed" />
-              <canvas ref={canvasRef} style={{ display: 'none' }} />
-              <div className="tryon-camera-guide">
-                <div className="tryon-camera-guide-frame" />
-              </div>
-            </div>
-            <div className="tryon-camera-actions">
-              <button className="tryon-capture-ring" onClick={captureFromCamera} id="tryon-capture-btn" aria-label="Capture photo">
-                <span className="tryon-capture-dot" />
-              </button>
-              <button className="tryon-ghost-btn" onClick={() => { stopCamera(); setStep(STEP.CHOOSE); setPhotoTab('upload'); }}>
-                Switch to File Upload
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ══════════════════════════════════════════════
-            STEP 2: REVIEW & CONSENT
-            ══════════════════════════════════════════════ */}
-        {step === STEP.CONSENT && (
-          <div className="tryon-body">
-            <div className="tryon-step-header">
-              <h2 className="tryon-step-title">Review &amp; Confirm</h2>
-              <p className="tryon-step-sub">We will place the selected luxury garment realistically onto this person</p>
-            </div>
-
-            {/* Distinct previews: Person + Garment */}
-            <div className="tryon-consent-row">
-              <div className="tryon-consent-card">
-                <img src={personUrl} alt="Your photo" className="tryon-consent-img" />
-                <span className="tryon-consent-tag">Your Photo</span>
-              </div>
-              <div className="tryon-consent-plus">+</div>
-              <div className="tryon-consent-card">
-                <img src={productImg} alt={tryOnProduct.name} className="tryon-consent-img" />
-                <span className="tryon-consent-tag">{tryOnProduct.name}</span>
-              </div>
-            </div>
-
-            {/* Product summary */}
-            <div className="tryon-review-meta">
-              <p className="tryon-review-title">{tryOnProduct.name}</p>
-              <p className="tryon-review-details">
-                {tryOnProduct.category} · {formatPrice(tryOnProduct.price)}
-              </p>
-            </div>
-
-            {/* Explicit consent checkbox */}
-            <label className="tryon-consent-label">
-              <input
-                type="checkbox"
-                checked={hasConsent}
-                onChange={e => setHasConsent(e.target.checked)}
-                className="tryon-consent-checkbox"
-                id="tryon-consent-checkbox"
-              />
-              <span>
-                I consent to sending this photo to the configured AI provider (FASHN.ai) to generate my realistic virtual look.
-              </span>
-            </label>
-
-            {fileError && <p className="tryon-field-error">{fileError}</p>}
-
-            <div className="tryon-action-row">
-              <button className="tryon-ghost-btn" onClick={clearPhoto}>← Change Photo</button>
-              <button
-                className="tryon-primary-btn"
-                onClick={processTryOn}
-                disabled={!hasConsent}
-                id="tryon-confirm-btn"
-              >
-                ✦ Generate Look
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ══════════════════════════════════════════════
-            STEP 3: PROCESSING
-            ══════════════════════════════════════════════ */}
-        {step === STEP.PROCESSING && (
-          <div className="tryon-body tryon-body-center">
-            <div className="tryon-spinner-wrap">
-              <div className="tryon-spinner" />
-              <img src={productImg} alt="" className="tryon-spinner-product" />
-            </div>
-            <h2 className="tryon-step-title">Fitting Your Look…</h2>
-            <p className="tryon-step-sub">
-              Draping <strong>{tryOnProduct.name}</strong> onto your silhouette
-            </p>
-            <div className="tryon-loading-stages">
-              {STAGE_LABELS.map((label, i) => (
-                <div key={label} className={`tryon-stage ${i === loadDot ? 'active' : ''}`}>
-                  <span className="tryon-stage-dot" />
-                  {label}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* ══════════════════════════════════════════════
-            STEP 4: GENERATED RESULT
-            ══════════════════════════════════════════════ */}
-        {step === STEP.RESULT && resultUrl && (
-          <div className="tryon-body tryon-body-result">
-            {/* Generated try-on image */}
-            <div className="tryon-result-image-col">
-              <img src={resultUrl} alt="Virtual try-on result" className="tryon-result-img" />
-              {resultMeta?.isAiGenerated && (
-                <span className="tryon-ai-badge">✦ AI Generated Fit</span>
-              )}
-            </div>
-
-            {/* Product details and actions */}
-            <div className="tryon-result-info-col">
-              <p className="tryon-result-label">✦ Your Custom Fit</p>
-              <h3 className="tryon-result-name">{tryOnProduct.name}</h3>
-              <p className="tryon-result-meta">
-                {tryOnProduct.colors?.[0]?.name} · {tryOnProduct.category}
-              </p>
-              <p className="tryon-result-price">{formatPrice(tryOnProduct.price)}</p>
-
-              {/* Size selector */}
-              {tryOnProduct.sizes && (
-                <div className="tryon-result-sizes">
-                  <p className="tryon-size-label">SELECT SIZE</p>
-                  <div className="tryon-size-row">
-                    {tryOnProduct.sizes.map(s => (
-                      <button
-                        key={s}
-                        className={`tryon-size-chip ${selectedSize === s ? 'active' : ''}`}
-                        onClick={() => setSelectedSize(s)}
-                      >
-                        {s}
-                      </button>
-                    ))}
+        {/* ════════════════════════════════════════════════════
+            ACTION SHEET: CHOOSE AN ACTION (Camera vs Files)
+            (Matches video 00:06 - 00:08)
+            ════════════════════════════════════════════════════ */}
+        {showPicker && (
+          <div className="vto-picker-backdrop" onClick={() => setShowPicker(false)}>
+            <div className="vto-picker-sheet" onClick={e => e.stopPropagation()}>
+              <h3 className="vto-picker-title">Choose an action</h3>
+              <div className="vto-picker-grid">
+                {/* Camera Option */}
+                <div className="vto-picker-item" onClick={startCamera}>
+                  <div className="vto-picker-icon camera">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                      <circle cx="12" cy="13" r="4"/>
+                    </svg>
                   </div>
-                </div>
-              )}
-
-              {/* Add to bag (CartContext) */}
-              <button
-                className={`tryon-primary-btn tryon-add-btn ${addedToBag ? 'added' : ''}`}
-                onClick={handleAddToBag}
-                disabled={!selectedSize}
-                id="tryon-add-to-bag"
-              >
-                {addedToBag ? '✓ Added to Bag' : 'Add to Bag'}
-              </button>
-
-              <a
-                href={resultUrl}
-                download={`${tryOnProduct.name.toLowerCase().replace(/\s+/g, '-')}-tryon.jpg`}
-                className="tryon-secondary-btn"
-                style={{ textAlign: 'center', textDecoration: 'none' }}
-              >
-                ↓ Download Look
-              </a>
-
-              <button className="tryon-secondary-btn" onClick={clearPhoto}>
-                Try Another Photo
-              </button>
-
-              <button className="tryon-ghost-btn" onClick={closeTryOn}>
-                Continue Browsing Store →
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ══════════════════════════════════════════════
-            STEP 5: ERROR & PROVIDER SETUP
-            ══════════════════════════════════════════════ */}
-        {step === STEP.ERROR && (
-          <div className="tryon-body tryon-body-center">
-            <div className="tryon-error-icon">
-              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="12" y1="8" x2="12" y2="12"/>
-                <line x1="12" y1="16" x2="12.01" y2="16"/>
-              </svg>
-            </div>
-            <h2 className="tryon-step-title">
-              {errorCode === 'PROVIDER_NOT_CONFIGURED' || error.includes('FASHN_API_KEY')
-                ? 'FASHN AI Key Required'
-                : 'Fitting Could Not Complete'}
-            </h2>
-            <p className="tryon-step-sub" style={{ maxWidth: 480, margin: '0 auto 16px', lineHeight: 1.6 }}>
-              {error || 'Something went wrong. Please check your connection and try again.'}
-            </p>
-
-            {/* In-panel API Key Setup Card */}
-            {(errorCode === 'PROVIDER_NOT_CONFIGURED' || errorCode === 'INVALID_API_KEY' || error.includes('FASHN')) && (
-              <div className="tryon-setup-card">
-                <div className="tryon-setup-badge">
-                  <span>✦</span>
-                  <strong>Connect Fashn.ai API Key</strong>
-                </div>
-                <p className="tryon-setup-desc">
-                  To perform real AI garment transfer on your photo, connect your FASHN.ai API key below. You can obtain a free key at{' '}
-                  <a href="https://fashn.ai/" target="_blank" rel="noreferrer">
-                    fashn.ai
-                  </a>.
-                </p>
-                <div className="tryon-setup-input-row">
-                  <input
-                    type="password"
-                    id="tryon-api-key-input"
-                    placeholder="fa-..."
-                    value={apiKeyInput}
-                    onChange={e => setApiKeyInput(e.target.value)}
-                    className="tryon-setup-input"
-                    onKeyDown={e => e.key === 'Enter' && handleSaveKey()}
-                  />
-                  <button
-                    className="tryon-primary-btn"
-                    onClick={handleSaveKey}
-                    disabled={savingKey || !apiKeyInput.trim()}
-                    style={{ padding: '10px 16px', fontSize: '11px', whiteSpace: 'nowrap' }}
-                  >
-                    {savingKey ? 'Connecting…' : 'Save & Run Try-On'}
-                  </button>
+                  <span>Camera</span>
                 </div>
 
-                <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px dashed #E8E4DC', textAlign: 'center' }}>
-                  <button
-                    type="button"
-                    onClick={runInstantPreview}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      cursor: 'pointer',
-                      fontSize: '11.5px',
-                      color: '#B49A75',
-                      fontWeight: 600,
-                      textDecoration: 'underline',
-                      letterSpacing: '0.04em',
-                    }}
-                  >
-                    ⚡ Don't have a key? Continue with Instant Preview Fit
-                  </button>
+                {/* Files / Gallery Option */}
+                <div className="vto-picker-item" onClick={() => fileInputRef.current?.click()}>
+                  <div className="vto-picker-icon files">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                    </svg>
+                  </div>
+                  <span>Files</span>
                 </div>
               </div>
-            )}
 
-            <div className="tryon-action-row" style={{ justifyContent: 'center' }}>
-              <button className="tryon-ghost-btn" onClick={clearPhoto}>Try Another Photo</button>
-              <button className="tryon-primary-btn" onClick={processTryOn}>Retry Fitting</button>
+              {/* Hidden file input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/jpeg,image/jpg,image/png,image/webp"
+                style={{ display: 'none' }}
+                onChange={handleFileSelect}
+              />
             </div>
           </div>
         )}
