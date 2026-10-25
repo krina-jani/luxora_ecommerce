@@ -532,41 +532,97 @@ export default function VirtualTryOnModal() {
             <h2 className="tryon-step-title">
               {error.includes('FASHN_API_KEY') ? 'FASHN AI Key Required' : 'Processing Failed'}
             </h2>
-            <p className="tryon-step-sub" style={{ maxWidth: 520, margin: '0 auto 20px', lineHeight: 1.6 }}>
+            <p className="tryon-step-sub" style={{ maxWidth: 520, margin: '0 auto 18px', lineHeight: 1.6 }}>
               {error || 'Something went wrong. Please try again.'}
             </p>
+
             {error.includes('FASHN_API_KEY') && (
               <div
                 style={{
                   background: '#FFFFFF',
                   border: '1px solid #D4C4A8',
-                  padding: '16px 20px',
+                  padding: '20px',
                   borderRadius: '4px',
                   maxWidth: '520px',
                   margin: '0 auto 24px',
                   textAlign: 'left',
-                  fontSize: '12.5px',
-                  color: '#4A4A4A',
-                  lineHeight: '1.7',
                 }}
               >
-                <strong style={{ color: '#202020', display: 'block', marginBottom: '6px' }}>
-                  Backend Setup Instructions:
-                </strong>
-                1. Open <code>backend/.env</code> in your project.<br />
-                2. Set <code>FASHN_API_KEY=your_actual_api_key</code> (get one at{' '}
-                <a
-                  href="https://fashn.ai/"
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ color: '#B49A75', textDecoration: 'underline' }}
-                >
-                  fashn.ai
-                </a>
-                ).<br />
-                3. The backend microservice is already running on port 8000 and will automatically authenticate requests.
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                  <span style={{ color: '#B49A75', fontSize: '16px' }}>✦</span>
+                  <strong style={{ color: '#202020', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                    Connect Your Fashn.ai Account
+                  </strong>
+                </div>
+                <p style={{ fontSize: '12.5px', color: '#6A6058', lineHeight: 1.6, marginBottom: '14px' }}>
+                  To generate real AI garment fitting on your photo, enter your FASHN API key below. You can get a free key at{' '}
+                  <a
+                    href="https://fashn.ai/"
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ color: '#B49A75', textDecoration: 'underline', fontWeight: 600 }}
+                  >
+                    fashn.ai
+                  </a>.
+                </p>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="password"
+                    id="tryon-api-key-input"
+                    placeholder="fa-..."
+                    style={{
+                      flex: 1,
+                      padding: '10px 14px',
+                      border: '1.5px solid #D4C4A8',
+                      borderRadius: '2px',
+                      fontSize: '13px',
+                      fontFamily: 'monospace',
+                      outline: 'none',
+                    }}
+                    onKeyDown={async (e) => {
+                      if (e.key === 'Enter') {
+                        const val = e.target.value.trim();
+                        if (val) {
+                          try {
+                            await fetch('http://127.0.0.1:8000/api/save-key', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ key: val }),
+                            });
+                            processTryOn();
+                          } catch {
+                            processTryOn();
+                          }
+                        }
+                      }
+                    }}
+                  />
+                  <button
+                    className="tryon-primary-btn"
+                    style={{ padding: '10px 18px', fontSize: '11px', whiteSpace: 'nowrap' }}
+                    onClick={async () => {
+                      const input = document.getElementById('tryon-api-key-input');
+                      const val = input?.value?.trim();
+                      if (val) {
+                        try {
+                          await fetch('http://127.0.0.1:8000/api/save-key', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ key: val }),
+                          });
+                          processTryOn();
+                        } catch {
+                          processTryOn();
+                        }
+                      }
+                    }}
+                  >
+                    Save &amp; Generate
+                  </button>
+                </div>
               </div>
             )}
+
             <div className="tryon-action-row" style={{ justifyContent: 'center' }}>
               <button className="tryon-ghost-btn" onClick={clearPhoto}>Try Another Photo</button>
               <button className="tryon-primary-btn" onClick={processTryOn}>Retry</button>

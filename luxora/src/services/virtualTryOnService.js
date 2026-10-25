@@ -4,23 +4,28 @@
  * LUXORA Virtual Try-On Service
  *
  * Real AI Pipeline:
+ * - Uses configurable VITE_API_BASE_URL (defaults to http://127.0.0.1:8000)
  * - Sends the customer's actual uploaded photo (File) to the backend
  *   along with the exact selected product ID and details.
  * - Endpoint: POST /api/virtual-try-on
  * - Securely forwards to FASHN.ai (tryon-max / tryon-v1.6).
- * - Strictly handles real AI errors and configuration states.
- * - No fake success results.
+ * - Distinguishes between network/fetch failures, backend unavailable,
+ *   unconfigured API key, and provider errors.
  * ─────────────────────────────────────────────────────────────
  */
 
-const API_BASE = import.meta.env.VITE_TRYON_API_URL || 'http://127.0.0.1:8000';
+const API_BASE = (
+  import.meta.env.VITE_API_BASE_URL ||
+  import.meta.env.VITE_TRYON_API_URL ||
+  'http://127.0.0.1:8000'
+).replace(/\/+$/, '');
 
 /**
  * Checks backend health and whether FASHN API key is configured.
  */
 export async function checkBackendStatus() {
   try {
-    const res = await fetch(`${API_BASE}/health`, { method: 'GET' });
+    const res = await fetch(`${API_BASE}/api/health`, { method: 'GET' });
     if (!res.ok) return { online: false, isConfigured: false };
     const data = await res.json();
     return {
@@ -41,6 +46,8 @@ export async function checkBackendStatus() {
 export async function runVirtualTryOn({
   personPhoto,
   productId,
+  productName,
+  productImageSrc,
   productCategory,
   productColor,
   consent = true,
@@ -49,10 +56,13 @@ export async function runVirtualTryOn({
     throw new Error('Please select or capture a photo first.');
   }
 
+  // Let browser set Content-Type header with proper boundary
   const formData = new FormData();
   formData.append('person_image', personPhoto, personPhoto.name || 'person.jpg');
   formData.append('product_id', String(productId));
   formData.append('consent', String(consent));
+  if (productName) formData.append('product_name', productName);
+  if (productImageSrc) formData.append('product_image_url', productImageSrc);
   if (productCategory) formData.append('category', productCategory);
   if (productColor) formData.append('color', productColor);
 
@@ -70,11 +80,14 @@ export async function runVirtualTryOn({
 
     if (!res.ok) {
       if (res.status === 503 && data.error === 'PROVIDER_NOT_CONFIGURED') {
-        const err = new Error(data.message || 'FASHN API key is required on the backend.');
+        const err = new Error(
+          data.message ||
+          'FASHN_API_KEY is not configured in backend/.env. Please set your key to enable live try-on.'
+        );
         err.code = 'PROVIDER_NOT_CONFIGURED';
         throw err;
       }
-      throw new Error(data.detail || data.message || `Server responded with status ${res.status}`);
+      throw new Error(data.detail || data.message || `Server error (${res.status})`);
     }
 
     if (!data.result_url) {
@@ -84,7 +97,13 @@ export async function runVirtualTryOn({
     return data.result_url;
   } catch (err) {
     if (err.name === 'AbortError') {
-      throw new Error('Virtual try-on request timed out. Please try again.');
+      throw new Error('Virtual try-on request timed out after 75 seconds. Please try again.');
+    }
+    // Handle browser network errors such as "Failed to fetch"
+    if (err instanceof TypeError && err.message.toLowerCase().includes('failed to fetch')) {
+      throw new Error(
+        `Cannot connect to backend server at ${API_BASE}. Make sure the backend is running on port 8000.`
+      );
     }
     throw err;
   } finally {
