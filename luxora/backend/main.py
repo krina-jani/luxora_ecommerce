@@ -1,25 +1,24 @@
 """
 LUXORA Virtual Try-On Backend Service
-Powered by FASHN AI API (tryon-max / tryon-v1.6) + Instant Realistic Visualizer fallback
+Powered exclusively by FASHN AI API (tryon-max / tryon-v1.6)
 
 Architecture & Security:
 - Validates uploaded customer photos (JPG, PNG, WebP up to 10MB)
-- Validates product ID, product name, and resolves authentic product image
-- Enforces customer consent flag
-- Explicit CORS support for http://localhost:5175, 5174, 5173
-- Health endpoints: GET /api/health and GET /health
-- Try-On endpoint: POST /api/virtual-try-on
-- Key management: POST /api/save-key (saves key to backend/.env)
-- Seamless execution:
-    * If FASHN_API_KEY is configured with a valid key -> Calls live FASHN API (tryon-max)
-    * If FASHN_API_KEY is not yet configured -> Seamlessly returns the photorealistic
-      catalogue model wear presentation for the exact selected product, so the website
-      works 100% out-of-the-box without blocking the customer!
+- Resolves authentic LUXORA catalog garment images securely on the server
+- Strictly enforces customer consent flag
+- Submits customer image (model_image) and garment image (product_image) to FASHN AI
+- Polls prediction until completed, failed, or timed out
+- Returns ONLY the genuine AI-generated single transferred image
+- Never synthesizes fake composites, overlays, or stacked collages
+- Cleanly returns 503 PROVIDER_NOT_CONFIGURED when API key is missing
+- Key management: POST /api/save-key to store real keys directly in backend/.env
+- Health check: GET /api/health and GET /health
 """
 
 import os
 import time
 import base64
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -29,8 +28,10 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from PIL import Image, ImageOps, ImageFilter, ImageEnhance
-import io
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("luxora_tryon")
 
 # Load environment variables from backend/.env
 env_path = Path(__file__).resolve().parent / ".env"
@@ -56,15 +57,15 @@ PRODUCT_IMAGE_MAP = {
 
 app = FastAPI(
     title="LUXORA Virtual Try-On & Catalog API",
-    description="Backend microservice for FASHN.ai virtual try-on integration and catalog image API",
-    version="1.0.0",
+    description="Backend service for FASHN.ai virtual try-on integration and catalog image API",
+    version="2.0.0",
 )
 
-# Configure CORS for development origins including 5175, 5174, 5173
+# Configure CORS for all dev ports
 default_origins = (
-    "http://localhost:5175,http://127.0.0.1:5175,"
-    "http://localhost:5174,http://127.0.0.1:5174,"
     "http://localhost:5173,http://127.0.0.1:5173,"
+    "http://localhost:5174,http://127.0.0.1:5174,"
+    "http://localhost:5175,http://127.0.0.1:5175,"
     "http://localhost:5176,http://127.0.0.1:5176"
 )
 origins_str = os.getenv("CORS_ORIGINS", default_origins)
@@ -85,6 +86,20 @@ ALLOWED_MIME_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
+def is_valid_api_key(key: str) -> bool:
+    """Validate that key matches Fashn.ai format and is not a placeholder"""
+    if not key:
+        return False
+    k = key.strip()
+    return bool(
+        len(k) >= 20 and
+        k.startswith("fa-") and
+        "your" not in k.lower() and
+        "[" not in k and
+        not k.startswith("FASHN_API_KEY=")
+    )
+
+
 def file_to_base64_data_uri(content: bytes, mime_type: str) -> str:
     encoded = base64.b64encode(content).decode("utf-8")
     return f"data:{mime_type};base64,{encoded}"
@@ -94,17 +109,12 @@ def file_to_base64_data_uri(content: bytes, mime_type: str) -> str:
 @app.get("/health")
 def health_check():
     key = os.getenv("FASHN_API_KEY", FASHN_API_KEY).strip()
-    is_configured = bool(
-        key and len(key) > 20 and
-        key.startswith("fa-") and
-        "your" not in key.lower() and
-        "[" not in key
-    )
+    configured = is_valid_api_key(key)
     return {
         "status": "healthy",
         "provider": "FASHN AI",
         "model": FASHN_MODEL_NAME,
-        "is_configured": is_configured,
+        "is_configured": configured,
     }
 
 
@@ -136,76 +146,40 @@ def get_product_image(product_id: int):
 
 @app.post("/api/save-key")
 async def save_api_key(payload: dict):
+    """Securely save a live FASHN API key to the backend environment and .env file"""
     new_key = payload.get("key", "").strip()
     if not new_key:
         raise HTTPException(status_code=400, detail="Key cannot be empty.")
     
+    if not is_valid_api_key(new_key):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid key format. FASHN API keys begin with 'fa-' and are at least 20 characters."
+        )
+
     global FASHN_API_KEY
     FASHN_API_KEY = new_key
     os.environ["FASHN_API_KEY"] = new_key
 
     env_file = Path(__file__).resolve().parent / ".env"
     lines = []
+    key_replaced = False
     if env_file.exists():
         with open(env_file, "r") as f:
             for line in f:
                 if line.startswith("FASHN_API_KEY="):
                     lines.append(f"FASHN_API_KEY={new_key}\n")
+                    key_replaced = True
                 else:
                     lines.append(line)
-    else:
-        lines = [f"FASHN_API_KEY={new_key}\n"]
+    if not key_replaced:
+        lines.insert(0, f"FASHN_API_KEY={new_key}\n")
 
     with open(env_file, "w") as f:
         f.writelines(lines)
 
-    return {"status": "saved", "message": "FASHN API key saved successfully."}
-
-
-def generate_photorealistic_tryon(person_bytes: bytes, product_bytes: bytes) -> bytes:
-    """
-    Seamlessly fits the selected LUXORA product garment onto the customer's photo:
-    - Scales and aligns the garment with the customer's torso.
-    - Generates realistic ambient shadow and edge contouring.
-    - Preserves customer's face, neck, and lower body.
-    - Color balances for realistic luxury editorial drape.
-    """
-    person_img = Image.open(io.BytesIO(person_bytes)).convert("RGBA")
-    product_img = Image.open(io.BytesIO(product_bytes)).convert("RGBA")
-
-    # Target canvas size
-    target_w, target_h = 768, 1024
-    person_fitted = ImageOps.fit(person_img, (target_w, target_h), method=Image.Resampling.LANCZOS)
-
-    # Size garment proportional to torso
-    garment_w = int(target_w * 0.74)
-    aspect = product_img.height / max(1, product_img.width)
-    garment_h = int(garment_w * aspect)
-    garment_resized = product_img.resize((garment_w, garment_h), Image.Resampling.LANCZOS)
-
-    # Torso placement coordinates
-    pos_x = (target_w - garment_w) // 2
-    pos_y = int(target_h * 0.28)
-
-    # Shadow layer for 3D realism
-    alpha = garment_resized.split()[3]
-    shadow_mask = alpha.filter(ImageFilter.GaussianBlur(10))
-    shadow_layer = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
-    shadow_fill = Image.new("RGBA", (garment_w, garment_h), (15, 12, 10, 85))
-    shadow_layer.paste(shadow_fill, (pos_x, pos_y + 5), mask=shadow_mask)
-
-    # Composite layers
-    blended = Image.alpha_composite(person_fitted, shadow_layer)
-    blended.paste(garment_resized, (pos_x, pos_y), mask=garment_resized)
-
-    # Final luxury toning
-    rgb = blended.convert("RGB")
-    enhancer = ImageEnhance.Color(rgb)
-    toned = enhancer.enhance(1.04)
-
-    out = io.BytesIO()
-    toned.save(out, format="JPEG", quality=92)
-    return out.getvalue()
+    logger.info("FASHN API key saved successfully and activated.")
+    return {"status": "saved", "message": "FASHN API key saved successfully and activated."}
 
 
 @app.post("/api/virtual-try-on")
@@ -219,16 +193,18 @@ async def create_virtual_try_on(
     category: Optional[str] = Form(None, description="Product category"),
 ):
     """
-    Runs the LUXORA Virtual Try-On pipeline:
-    1. Validates input photo & explicit customer consent
-    2. Resolves exact product image securely on the server
-    3. If FASHN_API_KEY is configured: Calls https://api.fashn.ai/v1/run with tryon-max
-    4. Seamlessly generates high-definition photorealistic fitting of garment on customer photo!
+    Runs the official LUXORA Virtual Try-On pipeline via FASHN.ai:
+    1. Validates input customer photo & explicit customer consent
+    2. Resolves exact product garment image from catalog
+    3. Checks valid FASHN_API_KEY (returns 503 PROVIDER_NOT_CONFIGURED if missing)
+    4. Submits tryon job to FASHN AI (POST https://api.fashn.ai/v1/run)
+    5. Polls status until completed
+    6. Returns the single genuine AI-generated outfit result
     """
     if not consent:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Customer consent is required before processing photo with AI.",
+            detail="Customer explicit consent is required before processing photo with AI.",
         )
 
     # 1. Validate customer uploaded file
@@ -242,7 +218,7 @@ async def create_virtual_try_on(
     if len(person_bytes) > MAX_FILE_SIZE_BYTES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File exceeds 10 MB limit ({len(person_bytes) / 1024 / 1024:.2f} MB).",
+            detail=f"Customer photo exceeds 10 MB limit ({len(person_bytes) / 1024 / 1024:.2f} MB).",
         )
     if len(person_bytes) < 1000:
         raise HTTPException(
@@ -262,86 +238,169 @@ async def create_virtual_try_on(
     with open(product_file_path, "rb") as pf:
         product_bytes = pf.read()
 
+    # 3. Check API Key validity
     current_key = os.getenv("FASHN_API_KEY", FASHN_API_KEY).strip()
-    has_valid_key = bool(
-        current_key and len(current_key) > 20 and
-        current_key.startswith("fa-") and
-        "your" not in current_key.lower() and
-        "[" not in current_key
-    )
-
-    # 3. If LIVE FASHN KEY is present -> Execute live FASHN API run & poll
-    if has_valid_key:
-        model_image_uri = file_to_base64_data_uri(person_bytes, person_image.content_type)
-        garment_image_uri = file_to_base64_data_uri(product_bytes, product_mime)
-
-        run_url = "https://api.fashn.ai/v1/run"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {current_key}",
-        }
-
-        payload = {
-            "model_name": FASHN_MODEL_NAME,
-            "inputs": {
-                "model_image": model_image_uri,
-                "product_image": garment_image_uri,
+    if not is_valid_api_key(current_key):
+        logger.warning("FASHN API key not configured or invalid placeholder detected.")
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "error": "PROVIDER_NOT_CONFIGURED",
+                "message": (
+                    "FASHN AI Virtual Try-On API key is not configured. "
+                    "Please set your real active API key from fashn.ai in backend/.env "
+                    "or enter it in the connection panel to enable AI garment transfer."
+                ),
             },
+        )
+
+    # 4. Prepare data URIs for FASHN AI API
+    model_image_uri = file_to_base64_data_uri(person_bytes, person_image.content_type)
+    garment_image_uri = file_to_base64_data_uri(product_bytes, product_mime)
+
+    run_url = "https://api.fashn.ai/v1/run"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {current_key}",
+    }
+
+    # Match official FASHN API schema for tryon-max vs tryon-v1.6
+    if FASHN_MODEL_NAME == "tryon-v1.6":
+        cat_map = "auto"
+        if category:
+            cl = category.lower()
+            if "trouser" in cl or "pant" in cl or "bottom" in cl:
+                cat_map = "bottoms"
+            elif "jacket" in cl or "coat" in cl or "blazer" in cl or "shirt" in cl or "knit" in cl or "top" in cl:
+                cat_map = "tops"
+            elif "dress" in cl or "suit" in cl:
+                cat_map = "one-pieces"
+        inputs = {
+            "model_image": model_image_uri,
+            "garment_image": garment_image_uri,
+            "category": cat_map,
+        }
+    else:
+        # Default tryon-max: supports model_image and product_image
+        inputs = {
+            "model_image": model_image_uri,
+            "product_image": garment_image_uri,
         }
 
-        run_res = None
-        try:
-            run_res = requests.post(run_url, json=payload, headers=headers, timeout=25)
-        except requests.RequestException:
-            pass
-
-        if run_res and run_res.status_code == 200:
-            run_data = run_res.json()
-            prediction_id = run_data.get("id")
-            if prediction_id:
-                status_url = f"https://api.fashn.ai/v1/status/{prediction_id}"
-                start_time = time.time()
-                poll_interval = 2.5
-
-                while time.time() - start_time < TRYON_TIMEOUT_SECONDS:
-                    time.sleep(poll_interval)
-                    try:
-                        status_res = requests.get(status_url, headers=headers, timeout=15)
-                    except requests.RequestException:
-                        continue
-
-                    if status_res.status_code != 200:
-                        continue
-
-                    res_data = status_res.json()
-                    job_status = res_data.get("status")
-
-                    if job_status == "completed":
-                        outputs = res_data.get("output", [])
-                        if outputs and len(outputs) > 0:
-                            return {
-                                "status": "success",
-                                "result_url": outputs[0],
-                                "prediction_id": prediction_id,
-                                "model": FASHN_MODEL_NAME,
-                                "is_ai_generated": True,
-                            }
-                    elif job_status == "failed":
-                        break
-
-    # 4. Built-in High-Fidelity Neural-Inspired Fitting Engine
-    # Fits the selected garment onto the customer's actual uploaded photo
-    time.sleep(1.0)
-    fitted_bytes = generate_photorealistic_tryon(person_bytes, product_bytes)
-    fitted_data_uri = file_to_base64_data_uri(fitted_bytes, "image/jpeg")
-
-    return {
-        "status": "success",
-        "result_url": fitted_data_uri,
-        "model": "LUXORA Fit Engine",
-        "is_ai_generated": True,
-        "is_configured": has_valid_key,
+    payload = {
+        "model_name": FASHN_MODEL_NAME,
+        "inputs": inputs,
     }
+
+    logger.info(f"Submitting prediction to FASHN AI ({FASHN_MODEL_NAME}) for product {product_id}...")
+
+    try:
+        run_res = requests.post(run_url, json=payload, headers=headers, timeout=30)
+    except requests.RequestException as e:
+        logger.error(f"Failed to connect to FASHN API: {e}")
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "error": "PROVIDER_CONNECTION_FAILED",
+                "message": f"Could not connect to FASHN AI service: {str(e)}",
+            },
+        )
+
+    if run_res.status_code == 401:
+        logger.error("FASHN AI rejected request: 401 UnauthorizedAccess")
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={
+                "error": "INVALID_API_KEY",
+                "message": "FASHN AI rejected the key as Unauthorized. Please enter a valid active key from fashn.ai.",
+            },
+        )
+
+    if run_res.status_code != 200:
+        err_detail = run_res.text
+        try:
+            err_json = run_res.json()
+            err_detail = err_json.get("error", {}).get("message", err_detail) or err_json.get("message", err_detail)
+        except Exception:
+            pass
+        logger.error(f"FASHN AI run failed ({run_res.status_code}): {err_detail}")
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "error": "PROVIDER_ERROR",
+                "message": f"FASHN AI error ({run_res.status_code}): {err_detail}",
+            },
+        )
+
+    run_data = run_res.json()
+    prediction_id = run_data.get("id")
+    if not prediction_id:
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "error": "INVALID_RESPONSE",
+                "message": "FASHN AI did not return a valid task ID.",
+            },
+        )
+
+    logger.info(f"FASHN prediction started with ID: {prediction_id}. Polling for completion...")
+
+    # 5. Poll status until completed
+    status_url = f"https://api.fashn.ai/v1/status/{prediction_id}"
+    start_time = time.time()
+    poll_interval = 2.0
+
+    while time.time() - start_time < TRYON_TIMEOUT_SECONDS:
+        time.sleep(poll_interval)
+        try:
+            status_res = requests.get(status_url, headers=headers, timeout=15)
+        except requests.RequestException:
+            continue
+
+        if status_res.status_code == 200:
+            res_data = status_res.json()
+            job_status = res_data.get("status")
+
+            if job_status == "completed":
+                outputs = res_data.get("output", [])
+                if outputs and len(outputs) > 0:
+                    result_url = outputs[0]
+                    logger.info(f"Virtual try-on completed successfully for {prediction_id}!")
+                    return {
+                        "status": "success",
+                        "result_url": result_url,
+                        "prediction_id": prediction_id,
+                        "model": FASHN_MODEL_NAME,
+                        "is_ai_generated": True,
+                    }
+                else:
+                    return JSONResponse(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        content={
+                            "error": "EMPTY_OUTPUT",
+                            "message": "FASHN AI completed prediction but returned no output image.",
+                        },
+                    )
+            elif job_status == "failed":
+                err_msg = res_data.get("error", {}).get("message", "Prediction failed on AI provider.")
+                logger.error(f"FASHN job {prediction_id} failed: {err_msg}")
+                return JSONResponse(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    content={
+                        "error": "PREDICTION_FAILED",
+                        "message": f"Virtual try-on generation failed: {err_msg}",
+                    },
+                )
+
+    # If polling timed out
+    logger.warning(f"FASHN prediction {prediction_id} timed out after {TRYON_TIMEOUT_SECONDS}s.")
+    return JSONResponse(
+        status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+        content={
+            "error": "TIMEOUT",
+            "message": f"Virtual try-on processing timed out after {TRYON_TIMEOUT_SECONDS} seconds. Please try again.",
+        },
+    )
 
 
 @app.get("/api/virtual-try-on/{prediction_id}")
@@ -358,4 +417,3 @@ def check_tryon_status(prediction_id: str):
         return res.json()
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
-

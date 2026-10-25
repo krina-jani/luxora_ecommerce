@@ -1,18 +1,20 @@
 import { useState, useRef, useEffect } from 'react';
 import { useTryOn } from '../context/TryOnContext';
 import { useCart } from '../context/CartContext';
-import { runVirtualTryOn } from '../services/virtualTryOnService';
+import { runVirtualTryOn, saveBackendApiKey } from '../services/virtualTryOnService';
 import { formatPrice } from '../data/products';
 import modelElena from '../assets/hero_slide1.png';
 import modelMarcus from '../assets/hero_slide2.png';
 import './VirtualTryOnModal.css';
 
-/* ─── Steps matching Google Shopping flow ───────────────────── */
+/* ─── Virtual Try-On Workflow Steps ─────────────────────────── */
 const STEP = {
-  INITIAL:    'INITIAL',    // Model view with "Try on you", "Female model", "Male model"
-  CAMERA:     'CAMERA',     // Live camera feed
-  PROCESSING: 'PROCESSING', // Iridescent aura with "Creating the look..."
-  RESULT:     'RESULT',     // Final look, right actions, Recently Tried tray
+  INITIAL:    'INITIAL',    // Step 1 & 2: Base product + Choose Person (You / Studio Models)
+  CAMERA:     'CAMERA',     // Live camera capture
+  REVIEW:     'REVIEW',     // Step 3: Review Customer Photo & Garment + Consent
+  PROCESSING: 'PROCESSING', // Step 4: Iridescent aura loading screen
+  RESULT:     'RESULT',     // Step 5: Single genuine AI-generated try-on result
+  CONFIG:     'CONFIG',     // API key connection when provider is unconfigured
 };
 
 const MAX_MB  = 10;
@@ -31,53 +33,56 @@ export default function VirtualTryOnModal() {
     closeTryOn,
     savedPersonPhoto,
     savedPersonUrl,
-    savedPersonType,
     savePersona,
-    clearPersona,
     recentLooks,
     addRecentLook,
   } = useTryOn();
 
   const { addToCart } = useCart();
 
-  const [step,         setStep]         = useState(STEP.INITIAL);
-  const [personFile,   setPersonFile]   = useState(null);
-  const [personUrl,    setPersonUrl]    = useState(null);
-  const [resultUrl,    setResultUrl]    = useState(null);
-  const [resultMeta,   setResultMeta]   = useState(null);
-  const [selectedSize, setSelectedSize] = useState(null);
-  const [addedToBag,   setAddedToBag]   = useState(false);
-  const [showPicker,   setShowPicker]   = useState(false); // Action sheet: Camera vs Files
-  const [loadStage,    setLoadStage]    = useState(0);     // 0: Creating, 1: Almost there, 2: Final touches
-  const [camError,     setCamError]     = useState('');
-  const [fileError,    setFileError]    = useState('');
-  const [stream,       setStream]       = useState(null);
+  // Explicit, cleanly separated state variables
+  const [step,               setStep]               = useState(STEP.INITIAL);
+  const [customerFile,       setCustomerFile]       = useState(null);
+  const [customerPreviewUrl, setCustomerPreviewUrl] = useState(null);
+  const [customerType,       setCustomerType]       = useState('user'); // 'user' | 'female_model' | 'male_model'
+  const [generatedResultUrl, setGeneratedResultUrl] = useState(null);
+  const [generationStatus,   setGenerationStatus]   = useState('idle'); // 'idle' | 'processing' | 'success' | 'error'
+  const [generationError,    setGenerationError]    = useState('');
+  const [selectedSize,       setSelectedSize]       = useState('M');
+  const [selectedColor,      setSelectedColor]      = useState('');
+  const [userConsent,        setUserConsent]        = useState(true);
+  const [addedToBag,         setAddedToBag]         = useState(false);
+  const [showPicker,         setShowPicker]         = useState(false); // Camera vs Files action sheet
+  const [loadStage,          setLoadStage]          = useState(0);     // 0: Creating, 1: Almost there, 2: Final touches
+  const [stream,             setStream]             = useState(null);
+  const [apiKeyInput,        setApiKeyInput]        = useState('');
+  const [keySaving,          setKeySaving]          = useState(false);
+  const [keySaveMsg,         setKeySaveMsg]         = useState('');
 
   const videoRef      = useRef(null);
   const canvasRef     = useRef(null);
   const fileInputRef  = useRef(null);
-  const stageTimerRef = useRef(null);
 
-  /* ── Initialize when product opened ────────────────────────── */
+  /* ── Initialize when modal opens or product changes ────────── */
   useEffect(() => {
     if (!isOpen || !tryOnProduct) return;
     setAddedToBag(false);
-    setCamError('');
-    setFileError('');
+    setGenerationError('');
     setShowPicker(false);
     setSelectedSize(tryOnProduct.sizes?.[0] ?? 'M');
+    setSelectedColor(tryOnProduct.colors?.[0]?.name ?? 'Standard');
 
-    // If user already has a saved photo/model persona, check if this product was already tried
+    // Check if this product was already generated in recent history
     const existing = recentLooks.find(l => l.productId === tryOnProduct.id);
-    if (existing) {
-      setResultUrl(existing.resultUrl);
-      setPersonUrl(existing.personUrl || savedPersonUrl);
+    if (existing && existing.resultUrl) {
+      setGeneratedResultUrl(existing.resultUrl);
+      if (existing.personUrl) setCustomerPreviewUrl(existing.personUrl);
       setStep(STEP.RESULT);
-    } else if (savedPersonPhoto) {
-      // Auto-fit with saved persona!
-      setPersonFile(savedPersonPhoto);
-      setPersonUrl(savedPersonUrl);
-      triggerGeneration(savedPersonPhoto, savedPersonUrl);
+    } else if (savedPersonPhoto && savedPersonUrl) {
+      // Saved persona exists — populate for review
+      setCustomerFile(savedPersonPhoto);
+      setCustomerPreviewUrl(savedPersonUrl);
+      setStep(STEP.REVIEW);
     } else {
       setStep(STEP.INITIAL);
     }
@@ -98,8 +103,8 @@ export default function VirtualTryOnModal() {
   useEffect(() => {
     if (step === STEP.PROCESSING) {
       setLoadStage(0);
-      const t1 = setTimeout(() => setLoadStage(1), 1200);
-      const t2 = setTimeout(() => setLoadStage(2), 2400);
+      const t1 = setTimeout(() => setLoadStage(1), 1800);
+      const t2 = setTimeout(() => setLoadStage(2), 3600);
       return () => { clearTimeout(t1); clearTimeout(t2); };
     }
   }, [step]);
@@ -107,7 +112,7 @@ export default function VirtualTryOnModal() {
   /* ── Camera Helpers ───────────────────────────────────────── */
   async function startCamera() {
     setShowPicker(false);
-    setCamError('');
+    setGenerationError('');
     try {
       const s = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 960 } },
@@ -115,7 +120,7 @@ export default function VirtualTryOnModal() {
       setStream(s);
       setStep(STEP.CAMERA);
     } catch {
-      setCamError('Camera access unavailable. Please use photo upload.');
+      setGenerationError('Camera access unavailable. Please upload a photo from files.');
       setStep(STEP.INITIAL);
     }
   }
@@ -135,22 +140,32 @@ export default function VirtualTryOnModal() {
       if (!blob) return;
       const file = new File([blob], 'camera_capture.jpg', { type: 'image/jpeg' });
       stopCamera();
-      commitAndRun(file, URL.createObjectURL(file), 'user');
+      const previewUrl = URL.createObjectURL(file);
+      setCustomerFile(file);
+      setCustomerPreviewUrl(previewUrl);
+      setCustomerType('user');
+      savePersona(file, previewUrl, 'user');
+      setStep(STEP.REVIEW);
     }, 'image/jpeg', 0.92);
   }
 
-  /* ── File / Gallery Helpers ───────────────────────────────── */
+  /* ── File / Gallery Upload ────────────────────────────────── */
   function handleFileSelect(e) {
     setShowPicker(false);
     const file = e.target.files?.[0];
     if (!file) return;
     const err = validateFile(file);
-    if (err) { setFileError(err); return; }
-    commitAndRun(file, URL.createObjectURL(file), 'user');
+    if (err) { setGenerationError(err); return; }
+    const previewUrl = URL.createObjectURL(file);
+    setCustomerFile(file);
+    setCustomerPreviewUrl(previewUrl);
+    setCustomerType('user');
+    savePersona(file, previewUrl, 'user');
+    setStep(STEP.REVIEW);
     e.target.value = '';
   }
 
-  /* ── Curated Studio Model Selection ───────────────────────── */
+  /* ── Studio Models Selection ──────────────────────────────── */
   async function selectStudioModel(type) {
     setShowPicker(false);
     const modelAsset = type === 'male' ? modelMarcus : modelElena;
@@ -158,73 +173,101 @@ export default function VirtualTryOnModal() {
       const res = await fetch(modelAsset);
       const blob = await res.blob();
       const file = new File([blob], `${type}_model.png`, { type: 'image/png' });
-      commitAndRun(file, modelAsset, `${type}_model`);
+      setCustomerFile(file);
+      setCustomerPreviewUrl(modelAsset);
+      setCustomerType(`${type}_model`);
+      savePersona(file, modelAsset, `${type}_model`);
+      setStep(STEP.REVIEW);
     } catch {
-      setFileError('Could not load studio model.');
+      setGenerationError('Could not load studio model photo.');
     }
   }
 
-  /* ── Commit photo and trigger generation ──────────────────── */
-  function commitAndRun(file, url, type) {
-    setPersonFile(file);
-    setPersonUrl(url);
-    savePersona(file, url, type);
-    triggerGeneration(file, url);
-  }
+  /* ── Step 4: Execute Genuine AI Generation ─────────────────── */
+  async function handleStartGeneration() {
+    if (!customerFile || !tryOnProduct) return;
+    if (!userConsent) {
+      setGenerationError('Please check the consent box to continue with AI try-on.');
+      return;
+    }
 
-  async function triggerGeneration(file, previewUrl) {
-    if (!file || !tryOnProduct) return;
     setStep(STEP.PROCESSING);
-    setFileError('');
+    setGenerationStatus('processing');
+    setGenerationError('');
 
     try {
       const res = await runVirtualTryOn({
-        personPhoto:     file,
+        personPhoto:     customerFile,
         productImageSrc: tryOnProduct.image,
         productId:       tryOnProduct.id,
         productCategory: tryOnProduct.category,
-        productColor:    tryOnProduct.colors?.[0]?.name ?? 'Standard',
+        productColor:    selectedColor,
         productName:     tryOnProduct.name,
         consent:         true,
       });
 
-      const url = typeof res === 'string' ? res : res.resultUrl;
-      setResultUrl(url);
-      setResultMeta(res);
+      if (!res?.resultUrl) {
+        throw new Error('AI provider returned empty response.');
+      }
+
+      // Preload image to ensure it is valid and fully loadable before displaying
+      await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = resolve;
+        img.onerror = () => reject(new Error('Generated image failed to load from provider.'));
+        img.src = res.resultUrl;
+      });
+
+      setGeneratedResultUrl(res.resultUrl);
+      setGenerationStatus('success');
       setStep(STEP.RESULT);
 
-      // Add to recently tried history
+      // Save to recent looks history
       addRecentLook({
         id: `${tryOnProduct.id}-${Date.now()}`,
         productId: tryOnProduct.id,
         productName: tryOnProduct.name,
         productPrice: tryOnProduct.price,
         productImage: tryOnProduct.image,
-        resultUrl: url,
-        personUrl: previewUrl,
+        resultUrl: res.resultUrl,
+        personUrl: customerPreviewUrl,
       });
     } catch (err) {
-      // Fallback seamlessly to high-resolution fitting presentation
+      setGenerationStatus('error');
+      if (err.code === 'PROVIDER_NOT_CONFIGURED' || err.code === 'INVALID_API_KEY') {
+        setGenerationError(err.message);
+        setStep(STEP.CONFIG);
+      } else {
+        setGenerationError(err.message || 'Virtual try-on generation failed. Please try again.');
+        setStep(STEP.REVIEW);
+      }
+    }
+  }
+
+  /* ── Save Live FASHN API Key ───────────────────────────────── */
+  async function handleSaveKey(e) {
+    e.preventDefault();
+    if (!apiKeyInput.trim()) return;
+    setKeySaving(true);
+    setKeySaveMsg('');
+    try {
+      await saveBackendApiKey(apiKeyInput.trim());
+      setKeySaveMsg('Key saved & verified! Starting try-on...');
+      setApiKeyInput('');
       setTimeout(() => {
-        setResultUrl(tryOnProduct.image);
-        setStep(STEP.RESULT);
-        addRecentLook({
-          id: `${tryOnProduct.id}-${Date.now()}`,
-          productId: tryOnProduct.id,
-          productName: tryOnProduct.name,
-          productPrice: tryOnProduct.price,
-          productImage: tryOnProduct.image,
-          resultUrl: tryOnProduct.image,
-          personUrl: previewUrl,
-        });
-      }, 1500);
+        handleStartGeneration();
+      }, 1000);
+    } catch (err) {
+      setKeySaveMsg(err.message || 'Failed to save key.');
+    } finally {
+      setKeySaving(false);
     }
   }
 
   /* ── Add to Cart ─────────────────────────────────────────── */
   function handleAddToBag() {
     if (!tryOnProduct || !selectedSize) return;
-    addToCart(tryOnProduct, selectedSize, tryOnProduct.colors?.[0]?.name ?? 'Standard');
+    addToCart(tryOnProduct, selectedSize, selectedColor);
     setAddedToBag(true);
     setTimeout(() => setAddedToBag(false), 2400);
   }
@@ -238,7 +281,7 @@ export default function VirtualTryOnModal() {
   ];
 
   /* ════════════════════════════════════════════════════════════
-     RENDER (Google Shopping-style Bottom Sheet / Side Panel)
+     RENDER
      ════════════════════════════════════════════════════════════ */
   return (
     <>
@@ -256,26 +299,34 @@ export default function VirtualTryOnModal() {
             </svg>
           </button>
 
-          {/* Small user avatar badge in top right during processing/result */}
-          {personUrl && (
-            <div className="vto-user-avatar" title="Your Try-On Photo" onClick={() => setShowPicker(true)}>
-              <img src={personUrl} alt="Persona" />
+          {/* User avatar badge in top right */}
+          {customerPreviewUrl && step !== STEP.INITIAL && (
+            <div
+              className="vto-user-avatar"
+              title="Change your try-on photo"
+              onClick={() => setShowPicker(true)}
+            >
+              <img src={customerPreviewUrl} alt="Your Persona" />
             </div>
           )}
         </div>
 
         {/* ════════════════════════════════════════════════════
-            STATE 1: INITIAL SELECTOR (Try On You / Female / Male)
+            STEP 1 & 2: INITIAL SELECTOR (Try On You / Models)
             ════════════════════════════════════════════════════ */}
         {step === STEP.INITIAL && (
           <div className="vto-initial-view">
-            {/* Base model standing straight */}
+            {/* Base model view */}
             <div className="vto-stage-img-wrap">
               <img src={tryOnProduct.image} alt={tryOnProduct.name} className="vto-stage-img" />
             </div>
 
             {/* Google Shopping Action Buttons */}
             <div className="vto-actions-card">
+              {generationError && (
+                <div className="vto-error-banner">{generationError}</div>
+              )}
+
               {/* Primary Blue Button */}
               <button
                 className="vto-btn-primary"
@@ -286,7 +337,7 @@ export default function VirtualTryOnModal() {
                   <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
                   <circle cx="12" cy="13" r="4"/>
                 </svg>
-                {savedPersonPhoto ? 'Try on your photo' : 'Try on you'}
+                {savedPersonPhoto ? 'Try on your saved photo' : 'Try on you'}
               </button>
 
               {/* Secondary Model Buttons */}
@@ -307,14 +358,14 @@ export default function VirtualTryOnModal() {
               </button>
 
               <p className="vto-legal-disclaimer">
-                Only upload a photo of yourself. AI generated looks may vary. LUXORA Privacy and Generative AI Terms apply.
+                Only upload a photo of yourself. Generative AI looks may vary. LUXORA Privacy and AI Terms apply.
               </p>
             </div>
           </div>
         )}
 
         {/* ════════════════════════════════════════════════════
-            CAMERA CAPTURE
+            LIVE CAMERA CAPTURE
             ════════════════════════════════════════════════════ */}
         {step === STEP.CAMERA && (
           <div className="vto-camera-view">
@@ -335,8 +386,86 @@ export default function VirtualTryOnModal() {
         )}
 
         {/* ════════════════════════════════════════════════════
-            STATE 2: IRIDESCENT AURORA LOADING SCREEN
-            (Matches reference video 00:15 - 00:35)
+            STEP 3: REVIEW PHOTO & GARMENT (Separate Previews + Consent)
+            ════════════════════════════════════════════════════ */}
+        {step === STEP.REVIEW && (
+          <div className="vto-review-view">
+            <div className="vto-review-header">
+              <h3 className="vto-review-title">Review Fitting Setup</h3>
+              <p className="vto-review-sub">Your photo and garment are kept strictly separate before AI transfer.</p>
+            </div>
+
+            {generationError && (
+              <div className="vto-error-banner">{generationError}</div>
+            )}
+
+            {/* Side-by-side separate previews */}
+            <div className="vto-review-grid">
+              {/* Box A: Customer Image */}
+              <div className="vto-review-card">
+                <span className="vto-card-tag">A. Your Photo</span>
+                <div className="vto-card-img-wrap">
+                  <img src={customerPreviewUrl} alt="Your Photo" className="vto-card-img" />
+                </div>
+                <button className="vto-card-change-btn" onClick={() => setShowPicker(true)}>
+                  Change Photo
+                </button>
+              </div>
+
+              {/* Box B: Selected Garment */}
+              <div className="vto-review-card">
+                <span className="vto-card-tag">B. Selected Garment</span>
+                <div className="vto-card-img-wrap">
+                  <img src={tryOnProduct.image} alt={tryOnProduct.name} className="vto-card-img" />
+                </div>
+                <div className="vto-card-details">
+                  <span className="vto-card-name">{tryOnProduct.name}</span>
+                  <span className="vto-card-price">{formatPrice(tryOnProduct.price)}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Consent checkbox */}
+            <div className="vto-consent-box">
+              <label className="vto-consent-label">
+                <input
+                  type="checkbox"
+                  checked={userConsent}
+                  onChange={e => setUserConsent(e.target.checked)}
+                  className="vto-consent-checkbox"
+                />
+                <span>
+                  I consent to LUXORA processing my photo with AI to generate a realistic garment try-on. My photo will not be shared or stored permanently.
+                </span>
+              </label>
+            </div>
+
+            {/* Launch Try-On Button */}
+            <div className="vto-review-actions">
+              <button
+                className="vto-btn-primary"
+                onClick={handleStartGeneration}
+                id="vto-generate-fit-btn"
+                disabled={!userConsent}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                </svg>
+                Generate Try-On Look
+              </button>
+              <button
+                className="vto-btn-secondary"
+                onClick={() => setStep(STEP.INITIAL)}
+              >
+                Back to Product
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ════════════════════════════════════════════════════
+            STEP 4: IRIDESCENT AURORA LOADING SCREEN
+            (Matches Google Shopping video 00:15 - 00:35)
             ════════════════════════════════════════════════════ */}
         {step === STEP.PROCESSING && (
           <div className="vto-loading-view">
@@ -353,22 +482,26 @@ export default function VirtualTryOnModal() {
               <h2 className="vto-loading-text">{STAGE_TEXTS[loadStage]}</h2>
 
               <p className="vto-loading-sub">
-                AI images may include mistakes.<br />
-                Fit and appearance will not be exact.
+                FASHN AI is transferring the {tryOnProduct.name} onto your photo.<br />
+                This typically takes 10–25 seconds.
               </p>
             </div>
           </div>
         )}
 
         {/* ════════════════════════════════════════════════════
-            STATE 3: GENERATED RESULT SCREEN
-            (Matches reference video 00:36 - 00:41 & 01:01)
+            STEP 5: GENUINE RESULT SCREEN (One Single Image)
+            (Matches Google Shopping video 00:36 - 00:41 & 01:01)
             ════════════════════════════════════════════════════ */}
-        {step === STEP.RESULT && resultUrl && (
+        {step === STEP.RESULT && generatedResultUrl && (
           <div className="vto-result-view">
-            {/* Fitted Result Display */}
+            {/* Fitted Result Display — SINGLE COHERENT IMAGE */}
             <div className="vto-result-canvas">
-              <img src={resultUrl} alt="Try-On Result" className="vto-result-img" />
+              <img
+                src={generatedResultUrl}
+                alt={`${tryOnProduct.name} Try-On Result`}
+                className="vto-result-img"
+              />
 
               {/* Floating Action Buttons on Right */}
               <div className="vto-float-actions">
@@ -376,8 +509,8 @@ export default function VirtualTryOnModal() {
                   className="vto-action-circle"
                   onClick={() => {
                     const a = document.createElement('a');
-                    a.href = resultUrl;
-                    a.download = `${tryOnProduct.name.toLowerCase().replace(/\s+/g, '-')}-fitted.jpg`;
+                    a.href = generatedResultUrl;
+                    a.download = `luxora-${tryOnProduct.name.toLowerCase().replace(/\s+/g, '-')}-tryon.jpg`;
                     a.click();
                   }}
                   title="Download Look"
@@ -392,7 +525,7 @@ export default function VirtualTryOnModal() {
                 <button
                   className="vto-action-circle"
                   onClick={() => setShowPicker(true)}
-                  title="Change Photo"
+                  title="Try Another Photo"
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
@@ -402,8 +535,8 @@ export default function VirtualTryOnModal() {
 
                 <button
                   className="vto-action-circle"
-                  onClick={() => triggerGeneration(personFile, personUrl)}
-                  title="Regenerate"
+                  onClick={handleStartGeneration}
+                  title="Regenerate Look"
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <polyline points="23 4 23 10 17 10"/>
@@ -451,7 +584,7 @@ export default function VirtualTryOnModal() {
                       key={look.id}
                       className={`vto-recent-card ${look.productId === tryOnProduct.id ? 'active' : ''}`}
                       onClick={() => {
-                        setResultUrl(look.resultUrl);
+                        setGeneratedResultUrl(look.resultUrl);
                       }}
                     >
                       <img src={look.resultUrl} alt={look.productName} className="vto-recent-thumb" />
@@ -465,8 +598,68 @@ export default function VirtualTryOnModal() {
         )}
 
         {/* ════════════════════════════════════════════════════
+            STEP CONFIG: API KEY CONNECTOR
+            ════════════════════════════════════════════════════ */}
+        {step === STEP.CONFIG && (
+          <div className="vto-config-view">
+            <div className="vto-config-card">
+              <div className="vto-config-badge">✦ AI Integration Setup</div>
+              <h3 className="vto-config-title">Connect FASHN.ai API</h3>
+              <p className="vto-config-desc">
+                Genuine AI garment transfer requires an active FASHN API key. Enter your key below to generate photorealistic looks in real-time.
+              </p>
+
+              {generationError && (
+                <div className="vto-config-alert">{generationError}</div>
+              )}
+
+              <form onSubmit={handleSaveKey} className="vto-config-form">
+                <div className="vto-input-wrap">
+                  <input
+                    type="password"
+                    placeholder="fa-xxxxxxxxxxxxxxxxxxxx"
+                    value={apiKeyInput}
+                    onChange={e => setApiKeyInput(e.target.value)}
+                    className="vto-key-input"
+                    autoFocus
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="vto-btn-primary"
+                  disabled={keySaving || !apiKeyInput.trim()}
+                >
+                  {keySaving ? 'Saving & Verifying...' : 'Connect & Run Try-On'}
+                </button>
+
+                {keySaveMsg && <p className="vto-key-msg">{keySaveMsg}</p>}
+              </form>
+
+              <div className="vto-config-links">
+                <a
+                  href="https://fashn.ai"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="vto-link"
+                >
+                  Get free API key at fashn.ai ↗
+                </a>
+                <button
+                  type="button"
+                  className="vto-config-back-btn"
+                  onClick={() => setStep(STEP.REVIEW)}
+                >
+                  ← Back to Review
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ════════════════════════════════════════════════════
             ACTION SHEET: CHOOSE AN ACTION (Camera vs Files)
-            (Matches video 00:06 - 00:08)
+            (Matches Google Shopping video 00:06 - 00:08)
             ════════════════════════════════════════════════════ */}
         {showPicker && (
           <div className="vto-picker-backdrop" onClick={() => setShowPicker(false)}>

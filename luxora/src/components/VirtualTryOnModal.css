@@ -578,8 +578,277 @@
   color: #1A73E8;
 }
 
+/* ── Error Banner ────────────────────────────────── */
+.vto-error-banner {
+  background: #FCE8E6;
+  color: #C5221F;
+  border: 1px solid #F5C2C7;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.4;
+  margin-bottom: 8px;
+}
+
+/* ── Review Step (Separate Previews + Consent) ───── */
+.vto-review-view {
+  display: flex;
+  flex-direction: column;
+  padding: 60px 20px 30px;
+  height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.vto-review-header {
+  margin-bottom: 16px;
+}
+
+.vto-review-title {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 20px;
+  font-weight: 600;
+  color: #202124;
+  margin: 0 0 4px;
+}
+
+.vto-review-sub {
+  font-size: 13px;
+  color: #5F6368;
+  margin: 0;
+}
+
+.vto-review-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.vto-review-card {
+  background: #FFFFFF;
+  border: 1px solid #E8EAED;
+  border-radius: 12px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+}
+
+.vto-card-tag {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #1A73E8;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  align-self: flex-start;
+}
+
+.vto-card-img-wrap {
+  width: 100%;
+  height: 170px;
+  background: #F8F9FA;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.vto-card-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.vto-card-change-btn {
+  margin-top: 8px;
+  background: none;
+  border: 1px solid #DADCE0;
+  border-radius: 14px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: #3C4043;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.vto-card-change-btn:hover {
+  background: #F1F3F4;
+}
+
+.vto-card-details {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.vto-card-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #202124;
+}
+
+.vto-card-price {
+  font-size: 11px;
+  color: #70757A;
+}
+
+.vto-consent-box {
+  background: #FFFFFF;
+  border: 1px solid #DADCE0;
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 20px;
+}
+
+.vto-consent-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #3C4043;
+  line-height: 1.45;
+}
+
+.vto-consent-checkbox {
+  margin-top: 2px;
+  accent-color: #1A73E8;
+  cursor: pointer;
+}
+
+.vto-review-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: auto;
+}
+
+/* ── Config Step (API Key Connector) ─────────────── */
+.vto-config-view {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 24px;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.vto-config-card {
+  background: #FFFFFF;
+  border: 1px solid #DADCE0;
+  border-radius: 16px;
+  padding: 28px 24px;
+  width: 100%;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+}
+
+.vto-config-badge {
+  display: inline-block;
+  background: #FEF7E0;
+  color: #B06000;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 12px;
+  margin-bottom: 12px;
+}
+
+.vto-config-title {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 20px;
+  font-weight: 600;
+  color: #202124;
+  margin: 0 0 8px;
+}
+
+.vto-config-desc {
+  font-size: 13px;
+  color: #5F6368;
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+
+.vto-config-alert {
+  background: #FCE8E6;
+  color: #C5221F;
+  border: 1px solid #F5C2C7;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  margin-bottom: 16px;
+}
+
+.vto-config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.vto-input-wrap {
+  width: 100%;
+}
+
+.vto-key-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: 1px solid #DADCE0;
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: monospace;
+  background: #F8F9FA;
+  transition: border-color 0.2s, background 0.2s;
+}
+.vto-key-input:focus {
+  outline: none;
+  border-color: #1A73E8;
+  background: #FFFFFF;
+}
+
+.vto-key-msg {
+  font-size: 12px;
+  color: #137333;
+  margin: 4px 0 0;
+}
+
+.vto-config-links {
+  margin-top: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.vto-link {
+  font-size: 12.5px;
+  color: #1A73E8;
+  text-decoration: none;
+  font-weight: 500;
+}
+.vto-link:hover {
+  text-decoration: underline;
+}
+
+.vto-config-back-btn {
+  background: none;
+  border: none;
+  color: #5F6368;
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 0;
+}
+.vto-config-back-btn:hover {
+  color: #202124;
+}
+
 @media (max-width: 600px) {
   .vto-panel {
     width: 100vw;
   }
 }
+

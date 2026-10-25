@@ -123,3 +123,20 @@ export async function runVirtualTryOn({
     clearTimeout(timeoutId);
   }
 }
+
+/**
+ * Saves a live FASHN API key to the backend server.
+ */
+export async function saveBackendApiKey(key) {
+  const res = await fetch(`${API_BASE}/api/save-key`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: key.trim() }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.detail || data.message || `Failed to save key (${res.status})`);
+  }
+  return data;
+}
+
