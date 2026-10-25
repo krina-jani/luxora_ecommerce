@@ -6,6 +6,7 @@ import { TryOnProvider } from './context/TryOnContext';
 import Navbar from './components/Navbar';
 import CartDrawer from './components/CartDrawer';
 import VirtualTryOnModal from './components/VirtualTryOnModal';
+import SeeAllLooksBanner from './components/SeeAllLooksBanner';
 import Home from './pages/Home';
 import Shop from './pages/Shop';
 import ProductDetails from './pages/ProductDetails';
@@ -23,6 +24,7 @@ export default function App() {
             <CartDrawer />
             {/* Virtual Try-On modal — rendered globally, triggered by any product */}
             <VirtualTryOnModal />
+            <SeeAllLooksBanner />
             <Routes>
               <Route path="/"           element={<Home />} />
               <Route path="/shop"       element={<Shop />} />

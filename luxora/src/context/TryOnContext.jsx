@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState } from 'react';
 
 const TryOnContext = createContext(null);
 
@@ -7,12 +7,14 @@ export function TryOnProvider({ children }) {
   const [isOpen, setIsOpen] = useState(false);
   const [savedPersonPhoto, setSavedPersonPhoto] = useState(null);
   const [savedPersonUrl, setSavedPersonUrl] = useState(null);
-  const [savedPersonType, setSavedPersonType] = useState('user'); // 'user' | 'female_model' | 'male_model'
+  const [savedPersonType, setSavedPersonType] = useState('female_model'); // 'user' | 'female_model' | 'male_model'
   const [recentLooks, setRecentLooks] = useState([]);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
 
   function openTryOn(product) {
     setTryOnProduct(product);
     setIsOpen(true);
+    setBannerDismissed(false);
   }
 
   function closeTryOn() {
@@ -31,14 +33,23 @@ export function TryOnProvider({ children }) {
     }
     setSavedPersonPhoto(null);
     setSavedPersonUrl(null);
-    setSavedPersonType('user');
+    setSavedPersonType('female_model');
   }
 
   function addRecentLook(look) {
     setRecentLooks(prev => {
       const filtered = prev.filter(l => l.productId !== look.productId);
-      return [look, ...filtered].slice(0, 8);
+      return [look, ...filtered].slice(0, 10);
     });
+  }
+
+  function removeRecentLook(lookId, e) {
+    if (e) e.stopPropagation();
+    setRecentLooks(prev => prev.filter(l => l.id !== lookId));
+  }
+
+  function dismissBanner() {
+    setBannerDismissed(true);
   }
 
   return (
@@ -55,6 +66,9 @@ export function TryOnProvider({ children }) {
         clearPersona,
         recentLooks,
         addRecentLook,
+        removeRecentLook,
+        bannerDismissed,
+        dismissBanner,
       }}
     >
       {children}
@@ -67,4 +81,3 @@ export function useTryOn() {
   if (!ctx) throw new Error('useTryOn must be used inside <TryOnProvider>');
   return ctx;
 }
-

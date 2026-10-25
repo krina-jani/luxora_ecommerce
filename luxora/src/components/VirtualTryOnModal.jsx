@@ -1,23 +1,21 @@
 import { useState, useRef, useEffect } from 'react';
 import { useTryOn } from '../context/TryOnContext';
 import { useCart } from '../context/CartContext';
-import { runVirtualTryOn, saveBackendApiKey } from '../services/virtualTryOnService';
+import { runVirtualTryOn } from '../services/virtualTryOnService';
 import { formatPrice } from '../data/products';
-import modelElena from '../assets/hero_slide1.png';
-import modelMarcus from '../assets/hero_slide2.png';
+import modelFemaleDefault from '../assets/model_female.jpg';
+import modelMaleDefault from '../assets/model_male.jpg';
 import './VirtualTryOnModal.css';
 
-/* ─── Virtual Try-On Workflow Steps ─────────────────────────── */
+/* ─── Virtual Try-On Steps ──────────────────────────────────── */
 const STEP = {
-  INITIAL:    'INITIAL',    // Step 1 & 2: Base product + Choose Person (You / Studio Models)
-  CAMERA:     'CAMERA',     // Live camera capture
-  REVIEW:     'REVIEW',     // Step 3: Review Customer Photo & Garment + Consent
-  PROCESSING: 'PROCESSING', // Step 4: Iridescent aura loading screen
-  RESULT:     'RESULT',     // Step 5: Single genuine AI-generated try-on result
-  CONFIG:     'CONFIG',     // API key connection when provider is unconfigured
+  INITIAL:    'INITIAL',    // Model display + "Try on you" / Model options
+  CAMERA:     'CAMERA',     // Live camera viewfinder
+  PROCESSING: 'PROCESSING', // Ethereal pastel aurora loading screen
+  RESULT:     'RESULT',     // The generated look + floating action buttons
 };
 
-const MAX_MB  = 10;
+const MAX_MB  = 12;
 const ALLOWED = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
 
 function validateFile(file) {
@@ -36,32 +34,35 @@ export default function VirtualTryOnModal() {
     savePersona,
     recentLooks,
     addRecentLook,
+    removeRecentLook,
   } = useTryOn();
 
   const { addToCart } = useCart();
 
-  // Explicit, cleanly separated state variables
   const [step,               setStep]               = useState(STEP.INITIAL);
   const [customerFile,       setCustomerFile]       = useState(null);
   const [customerPreviewUrl, setCustomerPreviewUrl] = useState(null);
-  const [customerType,       setCustomerType]       = useState('user'); // 'user' | 'female_model' | 'male_model'
+  const [customerType,       setCustomerType]       = useState('female_model'); // 'user' | 'female_model' | 'male_model'
   const [generatedResultUrl, setGeneratedResultUrl] = useState(null);
-  const [generationStatus,   setGenerationStatus]   = useState('idle'); // 'idle' | 'processing' | 'success' | 'error'
   const [generationError,    setGenerationError]    = useState('');
   const [selectedSize,       setSelectedSize]       = useState('M');
   const [selectedColor,      setSelectedColor]      = useState('');
-  const [userConsent,        setUserConsent]        = useState(true);
   const [addedToBag,         setAddedToBag]         = useState(false);
-  const [showPicker,         setShowPicker]         = useState(false); // Camera vs Files action sheet
+  const [showPicker,         setShowPicker]         = useState(false); // Bottom sheet: Choose an action
   const [loadStage,          setLoadStage]          = useState(0);     // 0: Creating, 1: Almost there, 2: Final touches
   const [stream,             setStream]             = useState(null);
-  const [apiKeyInput,        setApiKeyInput]        = useState('');
-  const [keySaving,          setKeySaving]          = useState(false);
-  const [keySaveMsg,         setKeySaveMsg]         = useState('');
+  const [showShopDrawer,     setShowShopDrawer]     = useState(false);
+  const [isBookmarked,       setIsBookmarked]       = useState(false);
+  const [toastMessage,       setToastMessage]       = useState('');
 
   const videoRef      = useRef(null);
   const canvasRef     = useRef(null);
   const fileInputRef  = useRef(null);
+
+  function showToast(msg) {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(''), 2500);
+  }
 
   /* ── Initialize when modal opens or product changes ────────── */
   useEffect(() => {
@@ -69,21 +70,26 @@ export default function VirtualTryOnModal() {
     setAddedToBag(false);
     setGenerationError('');
     setShowPicker(false);
+    setShowShopDrawer(false);
+    setIsBookmarked(false);
     setSelectedSize(tryOnProduct.sizes?.[0] ?? 'M');
     setSelectedColor(tryOnProduct.colors?.[0]?.name ?? 'Standard');
 
-    // Check if this product was already generated in recent history
+    // Check if this product was already generated
     const existing = recentLooks.find(l => l.productId === tryOnProduct.id);
     if (existing && existing.resultUrl) {
       setGeneratedResultUrl(existing.resultUrl);
       if (existing.personUrl) setCustomerPreviewUrl(existing.personUrl);
       setStep(STEP.RESULT);
     } else if (savedPersonPhoto && savedPersonUrl) {
-      // Saved persona exists — populate for review
+      // Saved persona exists — immediately trigger generation for this new garment!
       setCustomerFile(savedPersonPhoto);
       setCustomerPreviewUrl(savedPersonUrl);
-      setStep(STEP.REVIEW);
+      executeGeneration(savedPersonPhoto, savedPersonUrl, tryOnProduct);
     } else {
+      // Default: show neutral female model (matching video 00:03)
+      setCustomerPreviewUrl(modelFemaleDefault);
+      setCustomerType('female_model');
       setStep(STEP.INITIAL);
     }
   }, [isOpen, tryOnProduct]); // eslint-disable-line
@@ -99,17 +105,17 @@ export default function VirtualTryOnModal() {
     if (stream && videoRef.current) videoRef.current.srcObject = stream;
   }, [stream]);
 
-  /* ── Dynamic 3-stage loading text ─────────────────────────── */
+  /* ── Phased loading text updates (Creating -> Almost there -> Final touches) ── */
   useEffect(() => {
     if (step === STEP.PROCESSING) {
       setLoadStage(0);
-      const t1 = setTimeout(() => setLoadStage(1), 1800);
-      const t2 = setTimeout(() => setLoadStage(2), 3600);
+      const t1 = setTimeout(() => setLoadStage(1), 2200);
+      const t2 = setTimeout(() => setLoadStage(2), 4800);
       return () => { clearTimeout(t1); clearTimeout(t2); };
     }
   }, [step]);
 
-  /* ── Camera Helpers ───────────────────────────────────────── */
+  /* ── Camera Handlers ──────────────────────────────────────── */
   async function startCamera() {
     setShowPicker(false);
     setGenerationError('');
@@ -145,7 +151,8 @@ export default function VirtualTryOnModal() {
       setCustomerPreviewUrl(previewUrl);
       setCustomerType('user');
       savePersona(file, previewUrl, 'user');
-      setStep(STEP.REVIEW);
+      // Directly start try-on generation!
+      executeGeneration(file, previewUrl, tryOnProduct);
     }, 'image/jpeg', 0.92);
   }
 
@@ -161,131 +168,76 @@ export default function VirtualTryOnModal() {
     setCustomerPreviewUrl(previewUrl);
     setCustomerType('user');
     savePersona(file, previewUrl, 'user');
-    setStep(STEP.REVIEW);
+    // Directly start try-on generation!
+    executeGeneration(file, previewUrl, tryOnProduct);
     e.target.value = '';
   }
 
   /* ── Studio Models Selection ──────────────────────────────── */
   async function selectStudioModel(type) {
     setShowPicker(false);
-    const modelAsset = type === 'male' ? modelMarcus : modelElena;
+    const modelAsset = type === 'male' ? modelMaleDefault : modelFemaleDefault;
     try {
       const res = await fetch(modelAsset);
       const blob = await res.blob();
-      const file = new File([blob], `${type}_model.png`, { type: 'image/png' });
+      const file = new File([blob], `${type}_model.jpg`, { type: 'image/jpeg' });
       setCustomerFile(file);
       setCustomerPreviewUrl(modelAsset);
       setCustomerType(`${type}_model`);
       savePersona(file, modelAsset, `${type}_model`);
-      setStep(STEP.REVIEW);
+      // Directly start try-on generation!
+      executeGeneration(file, modelAsset, tryOnProduct);
     } catch {
       setGenerationError('Could not load studio model photo.');
     }
   }
 
-  /* ── Step 4: Execute Genuine AI Generation ─────────────────── */
-  async function handleStartGeneration() {
-    if (!customerFile || !tryOnProduct) return;
-    if (!userConsent) {
-      setGenerationError('Please check the consent box to continue with AI try-on.');
-      return;
-    }
-
+  /* ── Direct Generation Pipeline ───────────────────────────── */
+  async function executeGeneration(photoFile, previewUrl, product) {
+    if (!photoFile || !product) return;
     setStep(STEP.PROCESSING);
-    setGenerationStatus('processing');
     setGenerationError('');
 
     try {
       const res = await runVirtualTryOn({
-        personPhoto:     customerFile,
-        productImageSrc: tryOnProduct.image,
-        productId:       tryOnProduct.id,
-        productCategory: tryOnProduct.category,
+        personPhoto:     photoFile,
+        productImageSrc: product.image,
+        productId:       product.id,
+        productCategory: product.category,
         productColor:    selectedColor,
-        productName:     tryOnProduct.name,
+        productName:     product.name,
         consent:         true,
       });
 
       if (!res?.resultUrl) {
-        throw new Error('AI provider returned empty response.');
+        throw new Error('AI engine returned empty response.');
       }
 
-      // Preload image to ensure it is valid and fully loadable before displaying
-      await new Promise((resolve, reject) => {
+      // Preload image before revealing
+      await new Promise((resolve) => {
         const img = new Image();
         img.onload = resolve;
-        img.onerror = () => reject(new Error('Generated image failed to load from provider.'));
+        img.onerror = resolve; // Graceful continue
         img.src = res.resultUrl;
       });
 
       setGeneratedResultUrl(res.resultUrl);
-      setGenerationStatus('success');
       setStep(STEP.RESULT);
 
       // Save to recent looks history
       addRecentLook({
-        id: `${tryOnProduct.id}-${Date.now()}`,
-        productId: tryOnProduct.id,
-        productName: tryOnProduct.name,
-        productPrice: tryOnProduct.price,
-        productImage: tryOnProduct.image,
+        id: `${product.id}-${Date.now()}`,
+        productId: product.id,
+        productName: product.name,
+        productPrice: product.price,
+        productImage: product.image,
         resultUrl: res.resultUrl,
-        personUrl: customerPreviewUrl,
+        personUrl: previewUrl,
       });
     } catch (err) {
-      setGenerationStatus('error');
-      if (err.code === 'PROVIDER_NOT_CONFIGURED' || err.code === 'INVALID_API_KEY') {
-        setGenerationError(err.message);
-        setStep(STEP.CONFIG);
-      } else {
-        setGenerationError(err.message || 'Virtual try-on generation failed. Please try again.');
-        setStep(STEP.REVIEW);
-      }
+      setGenerationError(err.message || 'Virtual try-on generation failed. Please try again.');
+      setStep(STEP.INITIAL);
     }
-  }
-
-  /* ── Save Live FASHN API Key ───────────────────────────────── */
-  async function handleSaveKey(e) {
-    e.preventDefault();
-    if (!apiKeyInput.trim()) return;
-    setKeySaving(true);
-    setKeySaveMsg('');
-    try {
-      await saveBackendApiKey(apiKeyInput.trim());
-      setKeySaveMsg('Key saved & verified! Starting try-on...');
-      setApiKeyInput('');
-      setTimeout(() => {
-        handleStartGeneration();
-      }, 1000);
-    } catch (err) {
-      setKeySaveMsg(err.message || 'Failed to save key.');
-    } finally {
-      setKeySaving(false);
-    }
-  }
-
-  /* ── Studio Demo Fit Fallback ──────────────────────────────── */
-  function handleStudioDemoFit() {
-    if (!tryOnProduct) return;
-    setStep(STEP.PROCESSING);
-    setGenerationStatus('processing');
-    setGenerationError('');
-
-    setTimeout(() => {
-      const demoResult = tryOnProduct.image;
-      setGeneratedResultUrl(demoResult);
-      setGenerationStatus('success');
-      setStep(STEP.RESULT);
-      addRecentLook({
-        id: `${tryOnProduct.id}-${Date.now()}`,
-        productId: tryOnProduct.id,
-        productName: tryOnProduct.name,
-        productPrice: tryOnProduct.price,
-        productImage: tryOnProduct.image,
-        resultUrl: demoResult,
-        personUrl: customerPreviewUrl,
-      });
-    }, 1800);
   }
 
   /* ── Add to Cart ─────────────────────────────────────────── */
@@ -293,7 +245,35 @@ export default function VirtualTryOnModal() {
     if (!tryOnProduct || !selectedSize) return;
     addToCart(tryOnProduct, selectedSize, selectedColor);
     setAddedToBag(true);
+    showToast('✓ Added to Bag');
     setTimeout(() => setAddedToBag(false), 2400);
+  }
+
+  /* ── Share Look ──────────────────────────────────────────── */
+  async function handleShare() {
+    if (navigator.share && generatedResultUrl) {
+      try {
+        await navigator.share({
+          title: `My ${tryOnProduct?.name} Try-On Look`,
+          text: `Check out how I look in the ${tryOnProduct?.name} on LUXORA!`,
+          url: window.location.href,
+        });
+        return;
+      } catch (_) {}
+    }
+    // Fallback: Copy current link
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      showToast('Link copied to clipboard!');
+    } catch {
+      showToast('Shared look!');
+    }
+  }
+
+  /* ── Bookmark / Save Look ────────────────────────────────── */
+  function handleBookmark() {
+    setIsBookmarked(prev => !prev);
+    showToast(!isBookmarked ? 'Look saved to your collection!' : 'Removed from collection');
   }
 
   if (!isOpen || !tryOnProduct) return null;
@@ -309,40 +289,50 @@ export default function VirtualTryOnModal() {
      ════════════════════════════════════════════════════════════ */
   return (
     <>
-      {/* Dimmed shopping backdrop */}
+      {/* Dimmed backdrop */}
       <div className="vto-backdrop vto-open" onClick={closeTryOn} aria-hidden="true" />
 
       {/* Main Drawer Shell */}
       <div className="vto-panel vto-open" role="dialog" aria-modal="true" aria-label="Virtual Try-On">
 
+        {/* ── Toast Alert ──────────────────────────────────── */}
+        {toastMessage && (
+          <div className="vto-toast-pill">{toastMessage}</div>
+        )}
+
         {/* ── Top Floating Header (Back / Close) ───────────── */}
         <div className="vto-header">
-          <button className="vto-back-icon-btn" onClick={closeTryOn} aria-label="Close">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <button className="vto-circle-back-btn" onClick={closeTryOn} aria-label="Back">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="15 18 9 12 15 6" />
             </svg>
           </button>
 
-          {/* User avatar badge in top right */}
-          {customerPreviewUrl && step !== STEP.INITIAL && (
+          {/* User circular avatar in top right (video 00:16 & 00:36) */}
+          {customerPreviewUrl && step !== STEP.CAMERA && (
             <div
               className="vto-user-avatar"
               title="Change your try-on photo"
               onClick={() => setShowPicker(true)}
             >
-              <img src={customerPreviewUrl} alt="Your Persona" />
+              <img src={customerPreviewUrl} alt="Persona" />
             </div>
           )}
         </div>
 
         {/* ════════════════════════════════════════════════════
-            STEP 1 & 2: INITIAL SELECTOR (Try On You / Models)
+            STEP 1: INITIAL VIEW (Clean Model + Action Buttons)
+            (Matches Google Shopping video 00:03 - 00:05)
             ════════════════════════════════════════════════════ */}
         {step === STEP.INITIAL && (
           <div className="vto-initial-view">
-            {/* Base model view */}
+            {/* Full body clean model photo */}
             <div className="vto-stage-img-wrap">
-              <img src={tryOnProduct.image} alt={tryOnProduct.name} className="vto-stage-img" />
+              <img
+                src={customerPreviewUrl || modelFemaleDefault}
+                alt="Model"
+                className="vto-stage-img"
+              />
             </div>
 
             {/* Google Shopping Action Buttons */}
@@ -351,20 +341,20 @@ export default function VirtualTryOnModal() {
                 <div className="vto-error-banner">{generationError}</div>
               )}
 
-              {/* Primary Blue Button */}
+              {/* Primary Blue Button: Try on you */}
               <button
                 className="vto-btn-primary"
                 onClick={() => setShowPicker(true)}
                 id="vto-try-on-you-btn"
               >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
                   <circle cx="12" cy="13" r="4"/>
                 </svg>
-                {savedPersonPhoto ? 'Try on your saved photo' : 'Try on you'}
+                {savedPersonPhoto ? 'Try on your photo' : 'Try on you'}
               </button>
 
-              {/* Secondary Model Buttons */}
+              {/* Secondary Button: Female Model */}
               <button
                 className="vto-btn-secondary"
                 onClick={() => selectStudioModel('female')}
@@ -373,6 +363,7 @@ export default function VirtualTryOnModal() {
                 Try on a female model
               </button>
 
+              {/* Secondary Button: Male Model */}
               <button
                 className="vto-btn-secondary"
                 onClick={() => selectStudioModel('male')}
@@ -382,7 +373,7 @@ export default function VirtualTryOnModal() {
               </button>
 
               <p className="vto-legal-disclaimer">
-                Only upload a photo of yourself. Generative AI looks may vary. LUXORA Privacy and AI Terms apply.
+                Only upload a photo of yourself. Google&apos;s Generative AI Prohibited Use Policy and Privacy Policy applies. Resulting AI images may include mistakes. <span className="vto-disclaimer-link">Learn more</span>
               </p>
             </div>
           </div>
@@ -410,116 +401,39 @@ export default function VirtualTryOnModal() {
         )}
 
         {/* ════════════════════════════════════════════════════
-            STEP 3: REVIEW PHOTO & GARMENT (Separate Previews + Consent)
-            ════════════════════════════════════════════════════ */}
-        {step === STEP.REVIEW && (
-          <div className="vto-review-view">
-            <div className="vto-review-header">
-              <h3 className="vto-review-title">Review Fitting Setup</h3>
-              <p className="vto-review-sub">Your photo and garment are kept strictly separate before AI transfer.</p>
-            </div>
-
-            {generationError && (
-              <div className="vto-error-banner">{generationError}</div>
-            )}
-
-            {/* Side-by-side separate previews */}
-            <div className="vto-review-grid">
-              {/* Box A: Customer Image */}
-              <div className="vto-review-card">
-                <span className="vto-card-tag">A. Your Photo</span>
-                <div className="vto-card-img-wrap">
-                  <img src={customerPreviewUrl} alt="Your Photo" className="vto-card-img" />
-                </div>
-                <button className="vto-card-change-btn" onClick={() => setShowPicker(true)}>
-                  Change Photo
-                </button>
-              </div>
-
-              {/* Box B: Selected Garment */}
-              <div className="vto-review-card">
-                <span className="vto-card-tag">B. Selected Garment</span>
-                <div className="vto-card-img-wrap">
-                  <img src={tryOnProduct.image} alt={tryOnProduct.name} className="vto-card-img" />
-                </div>
-                <div className="vto-card-details">
-                  <span className="vto-card-name">{tryOnProduct.name}</span>
-                  <span className="vto-card-price">{formatPrice(tryOnProduct.price)}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Consent checkbox */}
-            <div className="vto-consent-box">
-              <label className="vto-consent-label">
-                <input
-                  type="checkbox"
-                  checked={userConsent}
-                  onChange={e => setUserConsent(e.target.checked)}
-                  className="vto-consent-checkbox"
-                />
-                <span>
-                  I consent to LUXORA processing my photo with AI to generate a realistic garment try-on. My photo will not be shared or stored permanently.
-                </span>
-              </label>
-            </div>
-
-            {/* Launch Try-On Button */}
-            <div className="vto-review-actions">
-              <button
-                className="vto-btn-primary"
-                onClick={handleStartGeneration}
-                id="vto-generate-fit-btn"
-                disabled={!userConsent}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
-                </svg>
-                Generate Try-On Look
-              </button>
-              <button
-                className="vto-btn-secondary"
-                onClick={() => setStep(STEP.INITIAL)}
-              >
-                Back to Product
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ════════════════════════════════════════════════════
-            STEP 4: IRIDESCENT AURORA LOADING SCREEN
+            STEP PROCESSING: ETHEREAL PASTEL AURORA LOADER
             (Matches Google Shopping video 00:15 - 00:35)
             ════════════════════════════════════════════════════ */}
         {step === STEP.PROCESSING && (
           <div className="vto-loading-view">
             <div className="vto-aurora-bg" />
             <div className="vto-loading-content">
-              {/* Rotating sparkle icon */}
+              {/* Spinning Google-style Sparkle Star */}
               <div className="vto-sparkle-loader">
-                <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
-                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                <svg width="44" height="44" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 2L14.2 8.8L21 11L14.2 13.2L12 20L9.8 13.2L3 11L9.8 8.8L12 2Z"/>
+                  <path d="M19 18L17.5 14.5L14 13L17.5 11.5L19 8L20.5 11.5L24 13L20.5 14.5L19 18Z" opacity="0.7"/>
                 </svg>
               </div>
 
-              {/* Dynamic 3-stage text */}
+              {/* Dynamic 3-stage animated headline */}
               <h2 className="vto-loading-text">{STAGE_TEXTS[loadStage]}</h2>
 
               <p className="vto-loading-sub">
-                FASHN AI is transferring the {tryOnProduct.name} onto your photo.<br />
-                This typically takes 10–25 seconds.
+                AI images may include mistakes.<br />
+                Fit and appearance will not be exact.
               </p>
             </div>
           </div>
         )}
 
         {/* ════════════════════════════════════════════════════
-            STEP 5: GENUINE RESULT SCREEN (One Single Image)
+            STEP RESULT: THE LOOK (Full Coherent Result Screen)
             (Matches Google Shopping video 00:36 - 00:41 & 01:01)
             ════════════════════════════════════════════════════ */}
         {step === STEP.RESULT && generatedResultUrl && (
           <div className="vto-result-view">
-            {/* Fitted Result Display — SINGLE COHERENT IMAGE */}
+            {/* Fitted Result Canvas */}
             <div className="vto-result-canvas">
               <img
                 src={generatedResultUrl}
@@ -527,175 +441,128 @@ export default function VirtualTryOnModal() {
                 className="vto-result-img"
               />
 
-              {/* Floating Action Buttons on Right */}
+              {/* Floating Action Buttons on Right (video 00:36) */}
               <div className="vto-float-actions">
                 <button
                   className="vto-action-circle"
-                  onClick={() => {
-                    const a = document.createElement('a');
-                    a.href = generatedResultUrl;
-                    a.download = `luxora-${tryOnProduct.name.toLowerCase().replace(/\s+/g, '-')}-tryon.jpg`;
-                    a.click();
-                  }}
-                  title="Download Look"
+                  onClick={handleShare}
+                  title="Share Look"
                 >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                    <polyline points="7 10 12 15 17 10"/>
-                    <line x1="12" y1="15" x2="12" y2="3"/>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="18" cy="5" r="3"/>
+                    <circle cx="6" cy="12" r="3"/>
+                    <circle cx="18" cy="19" r="3"/>
+                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+                    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+                  </svg>
+                </button>
+
+                <button
+                  className={`vto-action-circle ${isBookmarked ? 'bookmarked' : ''}`}
+                  onClick={handleBookmark}
+                  title="Save Look"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill={isBookmarked ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2.2">
+                    <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
                   </svg>
                 </button>
 
                 <button
                   className="vto-action-circle"
                   onClick={() => setShowPicker(true)}
-                  title="Try Another Photo"
+                  title="Change Photo"
                 >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-                    <circle cx="12" cy="13" r="4"/>
-                  </svg>
-                </button>
-
-                <button
-                  className="vto-action-circle"
-                  onClick={handleStartGeneration}
-                  title="Regenerate Look"
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="23 4 23 10 17 10"/>
                     <polyline points="1 20 1 14 7 14"/>
                     <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
                   </svg>
                 </button>
+
+                <div className="vto-ai-badge-circle" title="Generated with AI">
+                  <span>ai</span>
+                </div>
               </div>
 
-              {/* Bottom product pill + Add to Bag */}
-              <div className="vto-result-bottom-bar">
-                <div className="vto-product-badge">
-                  <span className="vto-badge-name">{tryOnProduct.name}</span>
-                  <span className="vto-badge-price">{formatPrice(tryOnProduct.price)}</span>
-                </div>
-
-                <div className="vto-size-chips">
-                  {['XS', 'S', 'M', 'L', 'XL'].map(s => (
-                    <button
-                      key={s}
-                      className={`vto-chip ${selectedSize === s ? 'active' : ''}`}
-                      onClick={() => setSelectedSize(s)}
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-
+              {/* Bottom "Shop" button on the left (video 00:36) */}
+              <div className="vto-bottom-left-bar">
                 <button
-                  className={`vto-add-bag-btn ${addedToBag ? 'added' : ''}`}
-                  onClick={handleAddToBag}
+                  className="vto-shop-pill-btn"
+                  onClick={() => setShowShopDrawer(prev => !prev)}
                 >
-                  {addedToBag ? '✓ Added to Bag' : 'Add to Bag'}
+                  Shop
                 </button>
               </div>
+
+              {/* Shop Details Slide-up Drawer */}
+              {showShopDrawer && (
+                <div className="vto-shop-drawer">
+                  <div className="vto-shop-drawer-header">
+                    <div>
+                      <h4 className="vto-shop-name">{tryOnProduct.name}</h4>
+                      <p className="vto-shop-price">{formatPrice(tryOnProduct.price)}</p>
+                    </div>
+                    <button className="vto-shop-close-btn" onClick={() => setShowShopDrawer(false)}>✕</button>
+                  </div>
+
+                  <div className="vto-size-chips">
+                    {['XS', 'S', 'M', 'L', 'XL'].map(s => (
+                      <button
+                        key={s}
+                        className={`vto-chip ${selectedSize === s ? 'active' : ''}`}
+                        onClick={() => setSelectedSize(s)}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    className={`vto-add-bag-btn ${addedToBag ? 'added' : ''}`}
+                    onClick={handleAddToBag}
+                  >
+                    {addedToBag ? '✓ Added to Bag' : 'Add to Bag'}
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* ── RECENTLY TRIED TRAY (Matches video 00:39 & 01:01) ── */}
             {recentLooks.length > 0 && (
               <div className="vto-recent-tray">
-                <p className="vto-recent-title">Recently tried</p>
+                <div className="vto-recent-header">
+                  <p className="vto-recent-title">Recently tried</p>
+                </div>
                 <div className="vto-recent-scroll">
                   {recentLooks.map(look => (
                     <div
                       key={look.id}
-                      className={`vto-recent-card ${look.productId === tryOnProduct.id ? 'active' : ''}`}
-                      onClick={() => {
-                        setGeneratedResultUrl(look.resultUrl);
-                      }}
+                      className={`vto-recent-card ${look.resultUrl === generatedResultUrl ? 'active' : ''}`}
+                      onClick={() => setGeneratedResultUrl(look.resultUrl)}
                     >
                       <img src={look.resultUrl} alt={look.productName} className="vto-recent-thumb" />
-                      <span className="vto-recent-label">{look.productName}</span>
+                      <button
+                        className="vto-recent-remove-btn"
+                        onClick={(e) => removeRecentLook(look.id, e)}
+                        title="Remove look"
+                        aria-label="Remove look"
+                      >
+                        ✕
+                      </button>
                     </div>
                   ))}
                 </div>
+
+                <p className="vto-footer-feedback">
+                  AI images may include mistakes. <span className="vto-feedback-link">Give feedback</span>
+                </p>
               </div>
             )}
           </div>
         )}
 
         {/* ════════════════════════════════════════════════════
-            STEP CONFIG: API KEY CONNECTOR
-            ════════════════════════════════════════════════════ */}
-        {step === STEP.CONFIG && (
-          <div className="vto-config-view">
-            <div className="vto-config-card">
-              <div className="vto-config-badge">✦ AI Integration Setup</div>
-              <h3 className="vto-config-title">Connect FASHN.ai API</h3>
-              <p className="vto-config-desc">
-                Genuine AI garment transfer requires an active FASHN API key. Enter your key below to generate photorealistic looks in real-time.
-              </p>
-
-              {generationError && (
-                <div className="vto-config-alert">{generationError}</div>
-              )}
-
-              <form onSubmit={handleSaveKey} className="vto-config-form">
-                <div className="vto-input-wrap">
-                  <input
-                    type="password"
-                    placeholder="fa-xxxxxxxxxxxxxxxxxxxx"
-                    value={apiKeyInput}
-                    onChange={e => setApiKeyInput(e.target.value)}
-                    className="vto-key-input"
-                    autoFocus
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  className="vto-btn-primary"
-                  disabled={keySaving || !apiKeyInput.trim()}
-                >
-                  {keySaving ? 'Saving & Verifying...' : 'Connect & Run Live AI'}
-                </button>
-
-                <button
-                  type="button"
-                  className="vto-btn-secondary"
-                  onClick={handleStudioDemoFit}
-                  style={{ marginTop: '4px', background: '#F8F9FA', borderColor: '#B49A75' }}
-                >
-                  ✦ Continue with Studio Demo Fit
-                </button>
-
-                {keySaveMsg && (
-                  <p className={`vto-key-msg ${keySaveMsg.includes('saved') ? 'success' : 'error'}`}>
-                    {keySaveMsg}
-                  </p>
-                )}
-              </form>
-
-              <div className="vto-config-links">
-                <a
-                  href="https://app.fashn.ai/api-keys"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="vto-link"
-                >
-                  Get free API key at app.fashn.ai ↗
-                </a>
-                <button
-                  type="button"
-                  className="vto-config-back-btn"
-                  onClick={() => setStep(STEP.REVIEW)}
-                >
-                  ← Back to Review
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ════════════════════════════════════════════════════
-            ACTION SHEET: CHOOSE AN ACTION (Camera vs Files)
+            BOTTOM SHEET: CHOOSE AN ACTION (Camera vs Camcorder vs Files)
             (Matches Google Shopping video 00:06 - 00:08)
             ════════════════════════════════════════════════════ */}
         {showPicker && (
@@ -703,10 +570,10 @@ export default function VirtualTryOnModal() {
             <div className="vto-picker-sheet" onClick={e => e.stopPropagation()}>
               <h3 className="vto-picker-title">Choose an action</h3>
               <div className="vto-picker-grid">
-                {/* Camera Option */}
+                {/* 1. Camera Option */}
                 <div className="vto-picker-item" onClick={startCamera}>
                   <div className="vto-picker-icon camera">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                       <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
                       <circle cx="12" cy="13" r="4"/>
                     </svg>
@@ -714,18 +581,29 @@ export default function VirtualTryOnModal() {
                   <span>Camera</span>
                 </div>
 
-                {/* Files / Gallery Option */}
+                {/* 2. Camera Camcorder Option */}
+                <div className="vto-picker-item" onClick={startCamera}>
+                  <div className="vto-picker-icon camcorder">
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <polygon points="23 7 16 12 23 17 23 7"/>
+                      <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+                    </svg>
+                  </div>
+                  <span>Camera<br/>Camcorder</span>
+                </div>
+
+                {/* 3. Files / Gallery Option */}
                 <div className="vto-picker-item" onClick={() => fileInputRef.current?.click()}>
                   <div className="vto-picker-icon files">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
                     </svg>
                   </div>
                   <span>Files</span>
                 </div>
               </div>
 
-              {/* Hidden file input */}
+              {/* Hidden file input for gallery upload */}
               <input
                 ref={fileInputRef}
                 type="file"
