@@ -813,8 +813,13 @@
 
 .vto-key-msg {
   font-size: 12px;
+  margin: 6px 0 0;
+}
+.vto-key-msg.success {
   color: #137333;
-  margin: 4px 0 0;
+}
+.vto-key-msg.error {
+  color: #C5221F;
 }
 
 .vto-config-links {

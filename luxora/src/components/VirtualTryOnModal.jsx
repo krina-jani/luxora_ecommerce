@@ -264,6 +264,30 @@ export default function VirtualTryOnModal() {
     }
   }
 
+  /* ── Studio Demo Fit Fallback ──────────────────────────────── */
+  function handleStudioDemoFit() {
+    if (!tryOnProduct) return;
+    setStep(STEP.PROCESSING);
+    setGenerationStatus('processing');
+    setGenerationError('');
+
+    setTimeout(() => {
+      const demoResult = tryOnProduct.image;
+      setGeneratedResultUrl(demoResult);
+      setGenerationStatus('success');
+      setStep(STEP.RESULT);
+      addRecentLook({
+        id: `${tryOnProduct.id}-${Date.now()}`,
+        productId: tryOnProduct.id,
+        productName: tryOnProduct.name,
+        productPrice: tryOnProduct.price,
+        productImage: tryOnProduct.image,
+        resultUrl: demoResult,
+        personUrl: customerPreviewUrl,
+      });
+    }, 1800);
+  }
+
   /* ── Add to Cart ─────────────────────────────────────────── */
   function handleAddToBag() {
     if (!tryOnProduct || !selectedSize) return;
@@ -630,20 +654,33 @@ export default function VirtualTryOnModal() {
                   className="vto-btn-primary"
                   disabled={keySaving || !apiKeyInput.trim()}
                 >
-                  {keySaving ? 'Saving & Verifying...' : 'Connect & Run Try-On'}
+                  {keySaving ? 'Saving & Verifying...' : 'Connect & Run Live AI'}
                 </button>
 
-                {keySaveMsg && <p className="vto-key-msg">{keySaveMsg}</p>}
+                <button
+                  type="button"
+                  className="vto-btn-secondary"
+                  onClick={handleStudioDemoFit}
+                  style={{ marginTop: '4px', background: '#F8F9FA', borderColor: '#B49A75' }}
+                >
+                  ✦ Continue with Studio Demo Fit
+                </button>
+
+                {keySaveMsg && (
+                  <p className={`vto-key-msg ${keySaveMsg.includes('saved') ? 'success' : 'error'}`}>
+                    {keySaveMsg}
+                  </p>
+                )}
               </form>
 
               <div className="vto-config-links">
                 <a
-                  href="https://fashn.ai"
+                  href="https://app.fashn.ai/api-keys"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="vto-link"
                 >
-                  Get free API key at fashn.ai ↗
+                  Get free API key at app.fashn.ai ↗
                 </a>
                 <button
                   type="button"
