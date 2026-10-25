@@ -79,7 +79,7 @@ export async function runVirtualTryOn({
     const data = await res.json().catch(() => ({}));
 
     if (!res.ok) {
-      if (res.status === 503 && data.error === 'PROVIDER_NOT_CONFIGURED') {
+      if (res.status === 503 && (data.error === 'PROVIDER_NOT_CONFIGURED' || data.detail?.error === 'PROVIDER_NOT_CONFIGURED')) {
         const err = new Error(
           data.message ||
           'FASHN_API_KEY is not configured in backend/.env. Please set your key to enable live try-on.'
@@ -87,14 +87,27 @@ export async function runVirtualTryOn({
         err.code = 'PROVIDER_NOT_CONFIGURED';
         throw err;
       }
-      throw new Error(data.detail || data.message || `Server error (${res.status})`);
+      if (res.status === 401 && (data.error === 'INVALID_API_KEY' || data.detail?.error === 'INVALID_API_KEY')) {
+        const err = new Error(
+          data.message ||
+          'FASHN AI rejected the key as Unauthorized. Please enter a valid active key from fashn.ai.'
+        );
+        err.code = 'INVALID_API_KEY';
+        throw err;
+      }
+      throw new Error(data.message || data.detail || `Server error (${res.status})`);
     }
 
     if (!data.result_url) {
       throw new Error('AI provider completed but returned no output image.');
     }
 
-    return data.result_url;
+    return {
+      resultUrl: data.result_url,
+      model: data.model || 'tryon-max',
+      predictionId: data.prediction_id,
+      isAiGenerated: Boolean(data.is_ai_generated),
+    };
   } catch (err) {
     if (err.name === 'AbortError') {
       throw new Error('Virtual try-on request timed out after 75 seconds. Please try again.');

@@ -223,74 +223,137 @@ async def create_virtual_try_on(
         "[" not in current_key
     )
 
-    # 3. If LIVE FASHN KEY is present -> Execute live FASHN API run & poll
-    if has_valid_key:
-        model_image_uri = file_to_base64_data_uri(person_bytes, person_image.content_type)
-        garment_image_uri = file_to_base64_data_uri(product_bytes, product_mime)
-
-        run_url = "https://api.fashn.ai/v1/run"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {current_key}",
-        }
-
-        payload = {
-            "model_name": FASHN_MODEL_NAME,
-            "inputs": {
-                "model_image": model_image_uri,
-                "product_image": garment_image_uri,
+    # 3. Provider Configuration Check
+    if not has_valid_key:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "error": "PROVIDER_NOT_CONFIGURED",
+                "message": "FASHN AI API key is required to generate real AI garment transfer on your photo. Enter your key to connect.",
+                "provider": "FASHN AI",
+                "model": FASHN_MODEL_NAME,
+                "setup_url": "https://fashn.ai/",
             },
-        }
+        )
 
-        run_res = None
-        try:
-            run_res = requests.post(run_url, json=payload, headers=headers, timeout=25)
-        except requests.RequestException as e:
-            print(f"[FASHN AI] Connection warning: {e}. Falling back to high-resolution model fit.")
+    # 4. Execute Real FASHN AI Try-On Max Prediction
+    model_image_uri = file_to_base64_data_uri(person_bytes, person_image.content_type)
+    garment_image_uri = file_to_base64_data_uri(product_bytes, product_mime)
 
-        if run_res and run_res.status_code == 200:
-            run_data = run_res.json()
-            prediction_id = run_data.get("id")
-            if prediction_id:
-                status_url = f"https://api.fashn.ai/v1/status/{prediction_id}"
-                start_time = time.time()
-                poll_interval = 2.5
-
-                while time.time() - start_time < TRYON_TIMEOUT_SECONDS:
-                    time.sleep(poll_interval)
-                    try:
-                        status_res = requests.get(status_url, headers=headers, timeout=15)
-                    except requests.RequestException:
-                        continue
-
-                    if status_res.status_code != 200:
-                        continue
-
-                    res_data = status_res.json()
-                    job_status = res_data.get("status")
-
-                    if job_status == "completed":
-                        outputs = res_data.get("output", [])
-                        if outputs and len(outputs) > 0:
-                            return {
-                                "status": "success",
-                                "result_url": outputs[0],
-                                "prediction_id": prediction_id,
-                                "model": FASHN_MODEL_NAME,
-                            }
-                    elif job_status == "failed":
-                        # If failed, break out to seamless visual fallback
-                        break
-        elif run_res:
-            print(f"[FASHN AI] Live prediction returned {run_res.status_code}: {run_res.text}. Seamlessly delivering catalogue fit.")
-
-    # 4. Instant Workable Result (When waiting for FASHN Key setup or testing)
-    # Delivers clean, authentic model fitting for the exact selected product
-    time.sleep(1.2)  # Natural visual processing feedback
-    result_data_uri = file_to_base64_data_uri(product_bytes, product_mime)
-    return {
-        "status": "success",
-        "result_url": result_data_uri,
-        "is_configured": has_valid_key,
-        "model": FASHN_MODEL_NAME if has_valid_key else "LUXORA Fit Engine",
+    run_url = "https://api.fashn.ai/v1/run"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {current_key}",
     }
+
+    payload = {
+        "model_name": FASHN_MODEL_NAME,
+        "inputs": {
+            "model_image": model_image_uri,
+            "product_image": garment_image_uri,
+        },
+    }
+
+    try:
+        run_res = requests.post(run_url, json=payload, headers=headers, timeout=25)
+    except requests.RequestException as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Network error connecting to FASHN API: {str(e)}",
+        )
+
+    if run_res.status_code == 401 or run_res.status_code == 403:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={
+                "error": "INVALID_API_KEY",
+                "message": "FASHN AI rejected the request (UnauthorizedAccess). Please verify your API key at fashn.ai.",
+                "setup_url": "https://fashn.ai/",
+            },
+        )
+
+    if run_res.status_code != 200:
+        err_msg = run_res.text
+        try:
+            err_json = run_res.json()
+            err_msg = err_json.get("error") or err_json.get("message") or err_msg
+        except Exception:
+            pass
+        return JSONResponse(
+            status_code=run_res.status_code,
+            content={
+                "error": "PROVIDER_ERROR",
+                "message": f"FASHN AI rejected request: {err_msg}",
+            },
+        )
+
+    run_data = run_res.json()
+    prediction_id = run_data.get("id")
+    if not prediction_id:
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={"error": "INVALID_RESPONSE", "message": "FASHN API did not return a prediction ID."},
+        )
+
+    # 5. Poll FASHN status until completed or failed
+    status_url = f"https://api.fashn.ai/v1/status/{prediction_id}"
+    start_time = time.time()
+    poll_interval = 2.5
+
+    while time.time() - start_time < TRYON_TIMEOUT_SECONDS:
+        time.sleep(poll_interval)
+        try:
+            status_res = requests.get(status_url, headers=headers, timeout=15)
+        except requests.RequestException:
+            continue
+
+        if status_res.status_code != 200:
+            continue
+
+        res_data = status_res.json()
+        job_status = res_data.get("status")
+
+        if job_status == "completed":
+            outputs = res_data.get("output", [])
+            if outputs and len(outputs) > 0:
+                return {
+                    "status": "success",
+                    "result_url": outputs[0],
+                    "prediction_id": prediction_id,
+                    "model": FASHN_MODEL_NAME,
+                    "is_ai_generated": True,
+                }
+        elif job_status == "failed":
+            err = res_data.get("error", "FASHN AI prediction failed.")
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content={
+                    "error": "GENERATION_FAILED",
+                    "message": f"AI garment transfer failed: {err}",
+                },
+            )
+
+    return JSONResponse(
+        status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+        content={
+            "error": "TIMEOUT",
+            "message": f"AI try-on timed out after {TRYON_TIMEOUT_SECONDS}s. Please retry.",
+        },
+    )
+
+
+@app.get("/api/virtual-try-on/{prediction_id}")
+def check_tryon_status(prediction_id: str):
+    """Direct status check endpoint for async tracking"""
+    current_key = os.getenv("FASHN_API_KEY", FASHN_API_KEY).strip()
+    if not current_key:
+        raise HTTPException(status_code=400, detail="FASHN_API_KEY is not configured.")
+    
+    status_url = f"https://api.fashn.ai/v1/status/{prediction_id}"
+    headers = {"Authorization": f"Bearer {current_key}"}
+    try:
+        res = requests.get(status_url, headers=headers, timeout=10)
+        return res.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
