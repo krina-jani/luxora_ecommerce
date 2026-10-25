@@ -1,0 +1,132 @@
+/* ============================================================
+   LUXORA — Responsive Styles
+   ============================================================ */
+
+@media (max-width: 1024px) {
+  .container {
+    padding: 0 24px;
+  }
+  .trust-bar-inner {
+    grid-template-columns: repeat(2, 1fr);
+    padding: 0 24px;
+  }
+  .hero-content h1 {
+    font-size: 48px !important;
+  }
+}
+
+@media (max-width: 768px) {
+  :root {
+    --nav-height: 56px;
+  }
+
+  .container {
+    padding: 0 16px;
+  }
+
+  .trust-bar-inner {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+    padding: 0 16px;
+  }
+
+  .btn {
+    padding: 12px 24px;
+    font-size: 11px;
+  }
+
+  /* Navbar */
+  .nav-links {
+    display: none !important;
+  }
+  .nav-mobile-toggle {
+    display: flex !important;
+  }
+
+  /* Hero */
+  .hero-section {
+    height: 70vh !important;
+    min-height: 400px !important;
+  }
+  .hero-content {
+    padding: 24px !important;
+  }
+  .hero-content h1 {
+    font-size: 36px !important;
+  }
+  .hero-buttons {
+    flex-direction: column !important;
+    gap: 10px !important;
+  }
+
+  /* Shop by category */
+  .home-shop-section {
+    flex-direction: column !important;
+    gap: 24px !important;
+  }
+  .shop-sidebar {
+    width: 100% !important;
+  }
+
+  /* Product Grid */
+  .product-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 16px !important;
+  }
+
+  /* Shop Page */
+  .shop-layout {
+    flex-direction: column !important;
+  }
+  .shop-filters-sidebar {
+    width: 100% !important;
+    position: static !important;
+  }
+
+  /* Product Details */
+  .product-details-layout {
+    flex-direction: column !important;
+  }
+  .product-images-col {
+    width: 100% !important;
+  }
+  .product-info-col {
+    width: 100% !important;
+    padding: 24px 0 !important;
+  }
+
+  /* Cart */
+  .cart-layout {
+    flex-direction: column !important;
+  }
+  .cart-summary-col {
+    width: 100% !important;
+  }
+
+  /* Checkout */
+  .checkout-layout {
+    flex-direction: column !important;
+  }
+  .checkout-summary-col {
+    width: 100% !important;
+    position: static !important;
+  }
+
+  /* Footer */
+  .footer-grid {
+    grid-template-columns: 1fr !important;
+    gap: 32px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .product-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .trust-bar-inner {
+    grid-template-columns: 1fr !important;
+  }
+  .section-title {
+    font-size: 32px !important;
+  }
+}

@@ -1,0 +1,190 @@
+/* ProductCard.css */
+.product-card {
+  position: relative;
+  transition: transform var(--transition);
+}
+
+.product-card:hover {
+  transform: translateY(-2px);
+}
+
+.product-card-link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+.product-card-image-wrap {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-lighter);
+  aspect-ratio: 3/4;
+}
+
+.product-card-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.5s ease;
+}
+
+.product-card:hover .product-card-img {
+  transform: scale(1.04);
+}
+
+.product-card-badges {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 2;
+}
+
+.product-badge {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 4px 8px;
+}
+
+.product-badge-new {
+  background: var(--color-dark);
+  color: #fff;
+}
+
+.product-badge-best {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.product-card-wish {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 3;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  cursor: pointer;
+  color: var(--color-dark);
+  transition: all var(--transition);
+  opacity: 0;
+}
+
+.product-card:hover .product-card-wish,
+.product-card-wish.wished {
+  opacity: 1;
+}
+
+.product-card-wish.wished {
+  color: #c0392b;
+  background: #fff;
+}
+
+.product-card-wish:hover {
+  background: #fff;
+  transform: scale(1.1);
+}
+
+/* ── Overlay: Quick Add + Try Now always accessible ──────────── */
+.product-card-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  gap: 1px;
+  transform: translateY(0);
+  opacity: 0.95;
+  transition: transform 0.25s ease, opacity 0.25s ease;
+  z-index: 4;
+}
+
+.product-card:hover .product-card-overlay,
+.product-card-overlay.visible {
+  opacity: 1;
+}
+
+.product-card-quick-add {
+  flex: 1;
+  background: rgba(26,26,26,0.92);
+  color: #fff;
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 11px 8px;
+  border: none;
+  cursor: pointer;
+  transition: background 0.22s ease;
+  white-space: nowrap;
+}
+
+.product-card-quick-add:hover {
+  background: rgba(0,0,0,1);
+}
+
+.product-card-info {
+  padding: 12px 0 0;
+}
+
+.product-card-name {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--color-dark);
+  margin-bottom: 4px;
+  letter-spacing: 0.01em;
+}
+
+.product-card-price-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.product-card-price {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--color-dark);
+}
+
+.product-card-original-price {
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--color-mid);
+  text-decoration: line-through;
+}
+
+.product-card-colors {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.product-color-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-light);
+  cursor: pointer;
+  transition: transform var(--transition);
+}
+
+.product-color-swatch:hover {
+  transform: scale(1.2);
+  border-color: var(--color-mid);
+}

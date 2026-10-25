@@ -1,0 +1,73 @@
+/* VirtualTryOnButton.css */
+
+/* ── Card variant (compact overlay on product cards) ── */
+.tryon-btn-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 11px 12px;
+  background: #B49A75;
+  color: #12100E;
+  border: none;
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.22s ease, transform 0.2s ease, box-shadow 0.2s ease;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.tryon-btn-card:hover {
+  background: #C4AA85;
+  color: #000;
+  transform: translateY(-1px);
+}
+
+/* ── Detail variant (prominent button on product detail page) ── */
+.tryon-btn-detail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 16px 24px;
+  background: transparent;
+  color: var(--color-dark, #202020);
+  border: 1.5px solid var(--color-dark, #202020);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.tryon-btn-detail::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--color-dark, #202020);
+  transform: translateX(-100%);
+  transition: transform 0.3s ease;
+  z-index: 0;
+}
+
+.tryon-btn-detail:hover::before {
+  transform: translateX(0);
+}
+
+.tryon-btn-detail:hover {
+  color: #FFFFFF;
+}
+
+.tryon-btn-detail-icon,
+.tryon-btn-detail > span:not(.tryon-btn-detail-icon) {
+  position: relative;
+  z-index: 1;
+}

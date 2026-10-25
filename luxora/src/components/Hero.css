@@ -1,0 +1,253 @@
+/* Hero.css */
+.hero-section {
+  position: relative;
+  width: 100%;
+  height: calc(100vh - var(--announcement-height) - var(--nav-height));
+  min-height: 680px;
+  max-height: 960px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+}
+
+/* Image stack — only active image shows */
+.hero-image-wrap {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.hero-bg-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* 'contain' would show black bars — 'cover' fills but may crop.
+     We offset this with objectPosition per-slide (set inline in JSX). */
+  object-fit: cover;
+  /* Default — overridden per slide via inline style */
+  object-position: center 15%;
+  opacity: 0;
+  transform: scale(1.04);
+  transition: opacity 0.8s ease, transform 8s ease;
+  will-change: transform, opacity;
+}
+
+.hero-bg-img.hero-img-active {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* Dual gradient overlay — darkens left side for text legibility,
+   adds a subtle bottom vignette, leaves the right 40% bright */
+.hero-overlay {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(
+      100deg,
+      rgba(10, 9, 8, 0.78) 0%,
+      rgba(10, 9, 8, 0.42) 40%,
+      rgba(10, 9, 8, 0.08) 68%,
+      transparent 100%
+    ),
+    linear-gradient(
+      to top,
+      rgba(0, 0, 0, 0.30) 0%,
+      transparent 28%
+    );
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* Content wrapper */
+.hero-content {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 80px;
+  transition: opacity 0.35s ease, transform 0.35s ease;
+}
+
+.hero-content-fade {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+.hero-text {
+  max-width: 520px;
+}
+
+/* Season label */
+.hero-season {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.75);
+  margin-bottom: 16px;
+}
+
+/* Main headline */
+.hero-headline {
+  font-family: var(--font-serif);
+  font-size: clamp(46px, 6.5vw, 86px);
+  font-weight: 400;
+  line-height: 1.03;
+  color: #FFFFFF;
+  margin-bottom: 22px;
+  letter-spacing: -0.015em;
+}
+
+/* Sub-copy */
+.hero-subtext {
+  font-family: var(--font-body);
+  font-size: 15px;
+  font-weight: 300;
+  color: rgba(255, 255, 255, 0.80);
+  line-height: 1.8;
+  margin-bottom: 40px;
+}
+
+/* CTA buttons */
+.hero-buttons {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+/* ─── Dot indicators ─────────────────────────── */
+.hero-dots {
+  position: absolute;
+  bottom: 32px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  z-index: 10;
+}
+
+.hero-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.40);
+  border: none;
+  cursor: pointer;
+  transition: all 0.35s ease;
+  padding: 0;
+}
+
+.hero-dot.active {
+  background: #FFFFFF;
+  width: 32px;
+  border-radius: 4px;
+}
+
+/* ─── Prev / Next arrows ─────────────────────── */
+.hero-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+  background: rgba(255, 255, 255, 0.10);
+  border: 1.5px solid rgba(255, 255, 255, 0.30);
+  color: #FFFFFF;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  font-size: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  line-height: 1;
+  padding-bottom: 2px;
+  user-select: none;
+}
+
+.hero-arrow:hover {
+  background: rgba(255, 255, 255, 0.24);
+  border-color: rgba(255, 255, 255, 0.75);
+  transform: translateY(-50%) scale(1.08);
+}
+
+.hero-arrow-prev { left: 32px; }
+.hero-arrow-next { right: 32px; }
+
+/* ─── Progress bar ───────────────────────────── */
+.hero-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  z-index: 10;
+}
+
+.hero-progress-bar {
+  height: 100%;
+  background: var(--color-accent);
+  animation: progressBar 3.5s linear forwards;
+}
+
+@keyframes progressBar {
+  from { width: 0%; }
+  to   { width: 100%; }
+}
+
+/* ─── Responsive ─────────────────────────────── */
+@media (max-width: 1024px) {
+  .hero-content {
+    padding: 0 48px;
+  }
+}
+
+@media (max-width: 768px) {
+  .hero-section {
+    height: calc(100svh - var(--announcement-height) - var(--nav-height));
+    min-height: 500px;
+    max-height: 800px;
+  }
+  .hero-content {
+    padding: 0 20px;
+  }
+  .hero-text {
+    max-width: 100%;
+  }
+  .hero-headline {
+    font-size: clamp(34px, 9vw, 52px);
+  }
+  .hero-arrow {
+    width: 38px;
+    height: 38px;
+    font-size: 22px;
+  }
+  .hero-arrow-prev { left: 12px; }
+  .hero-arrow-next { right: 12px; }
+  /* On mobile, push content toward the bottom so the face shows at top */
+  .hero-content {
+    align-self: flex-end;
+    padding-bottom: 60px;
+  }
+  .hero-section {
+    align-items: flex-end;
+  }
+}
+
+@media (max-width: 480px) {
+  .hero-headline {
+    font-size: clamp(30px, 10vw, 44px);
+  }
+  .hero-subtext {
+    font-size: 13px;
+    margin-bottom: 28px;
+  }
+}
